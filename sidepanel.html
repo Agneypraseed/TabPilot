@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>TabPilot · Jev</title>
+    <link rel="stylesheet" href="sidepanel.css">
+    <script src="sidepanel.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <div class="eyebrow">BROWSER AGENT</div>
+            <h1>TabPilot <span>with Jev</span></h1>
+          </div>
+        </div>
+        <div class="connection" id="connection" aria-live="polite">
+          <span class="connection-dot"></span>
+          <span id="connectionText">Checking Jev</span>
+        </div>
+      </header>
+
+      <section class="model-card">
+        <div class="model-glyph" aria-hidden="true">◆</div>
+        <div class="model-copy">
+          <div class="model-title">Jev · typed decisions</div>
+          <div class="model-subtitle">Page text and controls in · action choices out</div>
+        </div>
+        <div class="model-tag">ONLY MODEL</div>
+      </section>
+
+      <section class="tab-card" aria-label="Current browser tab">
+        <div class="tab-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 5.75A1.75 1.75 0 0 1 5.75 4h12.5A1.75 1.75 0 0 1 20 5.75v12.5A1.75 1.75 0 0 1 18.25 20H5.75A1.75 1.75 0 0 1 4 18.25V5.75Z"/><path d="M4.5 8h15M8 8v11.5"/></svg>
+        </div>
+        <div class="tab-copy">
+          <div class="tab-title" id="tabTitle">No active tab</div>
+          <div class="tab-url" id="tabUrl">Open a web page to get started</div>
+        </div>
+        <button class="icon-button" id="refreshTab" type="button" aria-label="Refresh current tab" title="Refresh tab">
+          <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"/></svg>
+        </button>
+      </section>
+
+      <section class="request-section">
+        <div class="section-heading">
+          <label for="taskInput">What should Jev do?</label>
+          <span class="quiet-label">STARTS A LIVE RUN</span>
+        </div>
+        <textarea id="taskInput" rows="4" maxlength="4000" placeholder="Describe the result you want…&#10;&#10;Example: Search this site for hiking backpacks and open the blue one."></textarea>
+
+        <label class="field-label" for="textToType">Exact text to enter <span>optional</span></label>
+        <input id="textToType" type="text" maxlength="500" autocomplete="off" placeholder="Only used if Jev chooses a visible text field">
+
+        <div class="privacy-note">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3M12 14v2"/></svg>
+          <span>The task, visible page text, control labels, and optional exact text go to Vercel AI Gateway for Jev. No screenshots or other models.</span>
+        </div>
+        <button class="primary-button" id="runButton" type="button">
+          <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5-10-6.5Z"/></svg></span>
+          <span id="runButtonText">Start task</span>
+          <span class="button-arrow" id="runButtonArrow" aria-hidden="true">↗</span>
+        </button>
+      </section>
+
+      <div class="status-line" id="statusLine" role="status" aria-live="polite">
+        <span class="status-indicator"></span>
+        <span id="statusText">Ready when you are.</span>
+      </div>
+
+      <section class="live-section" id="liveSection" hidden>
+        <div class="live-heading">
+          <div>
+            <div class="eyebrow">JEV'S CURRENT DECISION</div>
+            <h2 id="stepTitle">Reading the page</h2>
+          </div>
+          <span class="step-number" id="stepNumber">STEP 0</span>
+        </div>
+
+        <div class="classification-card">
+          <div class="class-icon" aria-hidden="true">▦</div>
+          <div class="class-copy">
+            <div class="eyebrow">PAGE CLASS</div>
+            <div class="class-title" id="pageClass">—</div>
+          </div>
+          <div class="control-count" id="controlCount">0 controls</div>
+        </div>
+
+        <div class="action-card" id="actionCard">
+          <div class="action-kicker" id="actionKicker">NEXT ACTION</div>
+          <div class="action-label" id="actionLabel">Waiting for Jev…</div>
+          <div class="action-detail" id="actionDetail"></div>
+          <div class="decision-metrics" id="decisionMetrics" hidden>
+            <div><span>Task match</span><strong id="matchValue">—</strong></div>
+            <div><span>Consequence risk</span><strong id="riskValue">—</strong></div>
+          </div>
+        </div>
+
+        <div class="page-excerpt" id="pageExcerptWrap" hidden>
+          <div class="eyebrow">PAGE TEXT JEV RECEIVED</div>
+          <p id="pageExcerpt"></p>
+        </div>
+
+        <button class="approve-button" id="approveButton" type="button" hidden>
+          <span class="execute-dot" aria-hidden="true"></span>
+          <span>Approve this step and continue</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+        </button>
+        <p class="review-hint" id="reviewHint" hidden>Jev marked this action as consequential or uncertain. Review it before allowing it to run.</p>
+      </section>
+
+      <section class="activity-section" id="activitySection" hidden>
+        <div class="activity-heading">
+          <span class="eyebrow">RUN HISTORY</span>
+          <span id="actionCounter">0 actions</span>
+        </div>
+        <ol class="activity-list" id="activityList"></ol>
+      </section>
+
+      <footer class="footer">
+        <div class="step-counter"><span class="counter-dot"></span><span>Jev only · local extension</span></div>
+        <div class="footer-note">STOP ANYTIME</div>
+      </footer>
+    </main>
+  </body>
+</html>

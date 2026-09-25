@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "TabPilot — Jev Browser Assistant",
+  "version": "0.1.0",
+  "description": "Use Jev to read page text, choose browser actions, and follow a task across tabs.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "debugger",
+    "scripting",
+    "sidePanel",
+    "tabs",
+    "windows"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:4311/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open TabPilot"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}

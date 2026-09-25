@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>TabPilot · Live Jev Demo</title>
+  <link rel="stylesheet" href="/demo-app.css">
+  <script src="/demo-app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/demo-app" aria-label="TabPilot demo home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><small>LOCAL BROWSER AGENT</small><strong>TabPilot <em>with Jev</em></strong></span>
+    </a>
+    <div class="connection" id="connection"><span class="dot"></span><span id="connectionText">Checking bridge…</span></div>
+  </header>
+
+  <main class="workspace">
+    <section class="agent-panel" aria-label="TabPilot task panel">
+      <div class="model-card">
+        <span class="model-glyph" aria-hidden="true">◆</span>
+        <span class="model-copy"><strong>Jev · typed decisions</strong><small>Page text and controls in · action choices out</small></span>
+        <span class="model-tag">ONLY MODEL</span>
+      </div>
+
+      <div class="tab-card">
+        <span class="tab-glyph" aria-hidden="true">▣</span>
+        <span class="tab-copy"><strong>TabPilot local demo</strong><small>http://127.0.0.1:4311/demo-app</small></span>
+        <span class="local-tag">LOCAL</span>
+      </div>
+
+      <form id="taskForm">
+        <div class="form-heading"><label for="taskInput">What should Jev do?</label><span>YOUR TASK</span></div>
+        <textarea id="taskInput" rows="4" maxlength="4000" placeholder="Describe the result you want…" required></textarea>
+        <button class="run-button" id="runButton" type="submit"><span aria-hidden="true">▶</span> Run with Jev <span class="arrow" aria-hidden="true">↗</span></button>
+      </form>
+
+      <div class="privacy-note"><span aria-hidden="true">◈</span><p>This demo sends only your task and the local test page’s text and button label to Vercel AI Gateway. It does not read your other tabs or send a screenshot.</p></div>
+
+      <section class="decision-card" id="decisionCard" hidden aria-live="polite">
+        <div class="decision-heading"><span>JEV’S DECISION</span><span id="decisionType">—</span></div>
+        <strong id="decisionAction">Waiting for Jev</strong>
+        <div class="metrics"><span>Task match <b id="matchValue">—</b></span><span>Consequence risk <b id="riskValue">—</b></span></div>
+      </section>
+
+      <div class="run-status" id="runStatus" role="status" aria-live="polite">Ready — the sample task is prefilled for the demo.</div>
+      <div class="panel-footer"><span><i></i> JEV ONLY</span><span>STOP ANYTIME</span></div>
+    </section>
+
+    <section class="page-frame" aria-label="Local demo web page">
+      <div class="browser-bar"><span class="browser-dots"><i></i><i></i><i></i></span><span class="address">127.0.0.1:4311/demo-app</span><span class="secure">LOCAL TEST</span></div>
+      <article class="sample-page" id="samplePage">
+        <p class="page-eyebrow">TABPILOT · SAFE DEMO PAGE</p>
+        <h1>One safe browser action</h1>
+        <p class="page-copy">Jev will inspect this page’s visible text and controls, choose the next action, and TabPilot will perform it here.</p>
+        <button class="next-button" id="nextButton" type="button">Next</button>
+        <p class="page-status" id="pageStatus" role="status" aria-live="polite">Waiting for Jev’s decision.</p>
+        <div class="safe-note"><span aria-hidden="true">✓</span> This button only changes this local page. Nothing is submitted or sent.</div>
+      </article>
+      <div class="flow-caption"><span>01</span> Task <b>→</b> <span>02</span> Jev decision <b>→</b> <span>03</span> Local click</div>
+    </section>
+  </main>
+</body>
+</html>

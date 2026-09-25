@@ -1,0 +1,13 @@
+{
+  "name": "tabpilot-jev",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Jev-only browser agent that reads page text and chooses bounded actions.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
