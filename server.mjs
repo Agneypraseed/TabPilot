@@ -55,6 +55,7 @@ const server = createServer(async (request, response) => {
       .replace('Open a web page to get started', 'http://127.0.0.1:4311/demo')
       .replace('<button class="primary-button" id="runButton" type="button">', '<button class="primary-button" id="runButton" type="button" disabled>')
       .replace('<input id="developerMode" type="checkbox">', '<input id="developerMode" type="checkbox" disabled>')
+      .replace('<input id="autoApprove" type="checkbox">', '<input id="autoApprove" type="checkbox" disabled>')
       .replace('<label class="developer-toggle" for="developerMode">', '<p class="review-hint" style="display:block">Static preview only. Use Developer mode in the actual Chrome extension to capture a live Jev trace.</p>\n        <label class="developer-toggle" for="developerMode">')
       .replace('</button>\n      </section>\n\n      <div class="status-line"', '</button>\n        <p class="review-hint" style="display:block">Static preview only. Use Developer mode in the TabPilot Chrome extension to see live Jev traces.</p>\n      </section>\n\n      <div class="status-line"');
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -131,7 +132,10 @@ const server = createServer(async (request, response) => {
   }
 
   const task = typeof input.task === 'string' ? input.task.trim() : '';
-  const textToType = typeof input.textToType === 'string' ? input.textToType.slice(0, 500) : '';
+  const fallbackTextToType = typeof input.textToType === 'string' ? input.textToType.trim().slice(0, 500) : '';
+  const quotedTaskText = extractQuotedTaskText(task);
+  const textToType = quotedTaskText || fallbackTextToType;
+  const exactTextSource = quotedTaskText ? 'task_quote' : fallbackTextToType ? 'advanced_fallback' : 'none';
   const page = sanitizePage(input.page);
   const pageText = typeof input.pageText === 'string' ? input.pageText.slice(0, 10000) : '';
   const controls = sanitizeControls(input.controls);
@@ -142,7 +146,7 @@ const server = createServer(async (request, response) => {
   }
 
   try {
-    const decision = await decideNextStep({ task, textToType, page, pageText, controls, history });
+    const decision = await decideNextStep({ task, textToType, exactTextSource, page, pageText, controls, history });
     json(response, 200, decision);
   } catch (error) {
     const message = error instanceof GatewayError ? error.message : 'The Jev request failed. Check the local server output and Gateway key.';
@@ -260,6 +264,21 @@ function cleanText(value, limit) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
+function extractQuotedTaskText(task) {
+  const value = String(task || '');
+  const patterns = [/"([^"\r\n]{1,500})"/g, /“([^”\r\n]{1,500})”/g, /‘([^’\r\n]{1,500})’/g];
+  const entryIntent = /\b(?:type|enter|write|say|saying|post|tweet|search|find|look\s+for|message|reply|comment|send|put)\b/i;
+  for (const pattern of patterns) {
+    for (const match of value.matchAll(pattern)) {
+      const prefix = value.slice(0, match.index);
+      if (!entryIntent.test(prefix) || /\b(?:don['’]t|do not|never|avoid)\b[^.!?]*$/i.test(prefix)) continue;
+      const exactText = match[1].trim();
+      if (exactText) return exactText.slice(0, 500);
+    }
+  }
+  return '';
+}
+
 function makeActionOptions(controls, textToType) {
   const options = {};
   const actionMap = new Map();
@@ -297,11 +316,11 @@ function makeActionOptions(controls, textToType) {
   return { options, actionMap, actionEntries };
 }
 
-async function decideNextStep({ task, textToType, page, pageText, controls, history }) {
+async function decideNextStep({ task, textToType, exactTextSource, page, pageText, controls, history }) {
   const { options, actionMap, actionEntries } = makeActionOptions(controls, textToType);
   const state = JSON.stringify({
     userTask: task,
-    exactTextProvidedByUser: textToType || null,
+    ...(exactTextSource === 'advanced_fallback' ? { exactTextProvidedByUser: textToType } : {}),
     page,
     visiblePageText: pageText,
     visibleControls: controls,
@@ -336,6 +355,7 @@ async function decideNextStep({ task, textToType, page, pageText, controls, hist
   const debug = {
     model: 'typesafe-ai/jev',
     endpoint: 'POST /v1/evaluate',
+    exactTextSource,
     evaluationCount: 1,
     availableActions: actionEntries,
     selection: {

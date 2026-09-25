@@ -52,14 +52,24 @@
           <span class="quiet-label">STARTS A LIVE RUN</span>
         </div>
         <textarea id="taskInput" rows="4" maxlength="4000" placeholder="Describe the result you want…&#10;&#10;Example: Search this site for hiking backpacks and open the blue one."></textarea>
+        <p class="task-text-hint" id="taskTextHint">Quote text after say, type, tweet, search, or similar instructions and Jev will use it automatically.</p>
 
-        <label class="field-label" for="textToType">Exact text to enter <span>optional</span></label>
-        <input id="textToType" type="text" maxlength="500" autocomplete="off" placeholder="Only used if Jev chooses a visible text field">
+        <details class="advanced-field">
+          <summary>Advanced · fallback text when the task has no quote</summary>
+          <label class="field-label" for="textToType">Fallback text to enter <span>optional</span></label>
+          <input id="textToType" type="text" maxlength="500" autocomplete="off" placeholder="Used only when no exact text is quoted in the task">
+        </details>
 
         <div class="privacy-note">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3M12 14v2"/></svg>
-          <span>The task, visible page text, control labels, and optional exact text go to Vercel AI Gateway for Jev. No screenshots or other models.</span>
+          <span>The task, visible page text, control labels, and optional fallback text go to Vercel AI Gateway for Jev. No screenshots or other models.</span>
         </div>
+        <label class="auto-approve-toggle" for="autoApprove">
+          <input id="autoApprove" type="checkbox">
+          <span class="auto-approve-copy"><strong>Auto-approve review steps</strong><small>Let Jev run steps that would normally pause for approval</small></span>
+          <span class="per-run-tag">THIS RUN</span>
+        </label>
+        <p class="auto-approve-warning" id="autoApproveWarning" hidden>When enabled, Jev can run uncertain or consequential steps without a checkpoint, including actions that submit, send, purchase, or delete.</p>
         <button class="primary-button" id="runButton" type="button">
           <span class="button-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5-10-6.5Z"/></svg></span>
           <span id="runButtonText">Start task</span>

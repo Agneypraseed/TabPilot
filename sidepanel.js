@@ -6,6 +6,8 @@ const state = {
   preferredTabId: null,
   goal: '',
   textToType: '',
+  textToTypeSource: 'none',
+  autoApprove: false,
   history: [],
   actionsRun: 0,
   runId: 0,
@@ -27,7 +29,10 @@ const ui = {
   tabUrl: $('#tabUrl'),
   refreshTab: $('#refreshTab'),
   taskInput: $('#taskInput'),
+  taskTextHint: $('#taskTextHint'),
   textToType: $('#textToType'),
+  autoApprove: $('#autoApprove'),
+  autoApproveWarning: $('#autoApproveWarning'),
   runButton: $('#runButton'),
   runButtonText: $('#runButtonText'),
   runButtonArrow: $('#runButtonArrow'),
@@ -63,6 +68,8 @@ ui.runButton.addEventListener('click', startOrStop);
 ui.approveButton.addEventListener('click', approvePendingStep);
 ui.refreshTab.addEventListener('click', refreshTabInfo);
 ui.developerMode.addEventListener('change', () => setDeveloperMode(ui.developerMode.checked));
+ui.taskInput.addEventListener('input', updateTaskTextHint);
+ui.autoApprove.addEventListener('change', updateAutoApproveWarning);
 ui.copyTrace.addEventListener('click', copyDeveloperTrace);
 chrome.tabs.onCreated.addListener((tab) => state.createdTabs.set(tab.id, Date.now()));
 chrome.tabs.onRemoved.addListener((tabId) => state.createdTabs.delete(tabId));
@@ -72,7 +79,35 @@ chrome.tabs.onActivated.addListener(() => {
 
 async function initialize() {
   initializeDeveloperMode();
+  updateTaskTextHint();
+  updateAutoApproveWarning();
   await Promise.all([checkBridge(), refreshTabInfo()]);
+}
+
+function extractQuotedTaskText(task) {
+  const value = String(task || '');
+  const patterns = [/"([^"\r\n]{1,500})"/g, /“([^”\r\n]{1,500})”/g, /‘([^’\r\n]{1,500})’/g];
+  const entryIntent = /\b(?:type|enter|write|say|saying|post|tweet|search|find|look\s+for|message|reply|comment|send|put)\b/i;
+  for (const pattern of patterns) {
+    for (const match of value.matchAll(pattern)) {
+      const prefix = value.slice(0, match.index);
+      if (!entryIntent.test(prefix) || /\b(?:don['’]t|do not|never|avoid)\b[^.!?]*$/i.test(prefix)) continue;
+      const exactText = match[1].trim();
+      if (exactText) return exactText.slice(0, 500);
+    }
+  }
+  return '';
+}
+
+function updateTaskTextHint() {
+  const quotedText = extractQuotedTaskText(ui.taskInput.value);
+  ui.taskTextHint.textContent = quotedText
+    ? `Detected task text: “${quotedText}”. This takes priority over the Advanced fallback.`
+    : 'Quote text after say, type, tweet, search, or similar instructions and Jev will use it automatically.';
+}
+
+function updateAutoApproveWarning() {
+  ui.autoApproveWarning.hidden = !ui.autoApprove.checked;
 }
 
 function initializeDeveloperMode() {
@@ -163,7 +198,11 @@ async function startOrStop() {
   }
 
   state.goal = task;
-  state.textToType = ui.textToType.value;
+  const quotedTaskText = extractQuotedTaskText(task);
+  const fallbackText = ui.textToType.value.trim().slice(0, 500);
+  state.textToType = quotedTaskText || fallbackText;
+  state.textToTypeSource = quotedTaskText ? 'task_quote' : fallbackText ? 'advanced_fallback' : 'none';
+  state.autoApprove = ui.autoApprove.checked;
   state.history = [];
   state.actionsRun = 0;
   state.debugEntries = [];
@@ -188,6 +227,9 @@ function stopRun(message = 'Stopped.') {
   state.running = false;
   state.awaitingApproval = false;
   state.pending = null;
+  state.autoApprove = false;
+  ui.autoApprove.checked = false;
+  updateAutoApproveWarning();
   ui.approveButton.hidden = true;
   ui.reviewHint.hidden = true;
   setStatus(message, 'ready');
@@ -198,6 +240,9 @@ function finishRun(message, kind = 'ready') {
   state.running = false;
   state.awaitingApproval = false;
   state.pending = null;
+  state.autoApprove = false;
+  ui.autoApprove.checked = false;
+  updateAutoApproveWarning();
   ui.approveButton.hidden = true;
   ui.reviewHint.hidden = true;
   ui.taskInput.disabled = false;
@@ -243,7 +288,7 @@ async function runLoop(runId) {
         finishRun('Jev chose “Ask the user”; no page action was performed. Turn on Developer mode to inspect the choices.');
         return;
       }
-      if (decision.requiresReview) {
+      if (decision.requiresReview && !state.autoApprove) {
         setTraceExecution('Paused. Waiting for your approval before sending browser input.');
         state.pending = { decision, pageState, tab };
         state.awaitingApproval = true;
@@ -264,17 +309,22 @@ async function runLoop(runId) {
 async function performAndContinue(decision, pageState, tab, runId) {
   if (!state.running || runId !== state.runId) return;
   const tabsBefore = await chrome.tabs.query({});
+  const autoApproved = decision.requiresReview && state.autoApprove;
   setStatus(actionProgressText(decision.action), 'working');
-  setTraceExecution('Chrome is sending the selected input now.');
+  setTraceExecution(autoApproved
+    ? 'Auto-approve is on. Chrome is sending the step Jev flagged for review.'
+    : 'Chrome is sending the selected input now.');
   try {
     await executeBrowserAction(tab.id, decision.action, pageState.viewport);
   } catch (error) {
     setTraceExecution('Input failed: ' + (error.message || 'Chrome could not perform the action.'));
     throw error;
   }
-  setTraceExecution('Chrome sent the selected browser input successfully.');
+  setTraceExecution(autoApproved
+    ? 'Chrome sent the auto-approved browser input successfully.'
+    : 'Chrome sent the selected browser input successfully.');
   state.actionsRun += 1;
-  addHistory(tab, decision.action, 'ran');
+  addHistory(tab, decision.action, autoApproved ? 'auto-approved and ran' : 'ran');
   const nextTab = await followAfterAction(tab, tabsBefore, runId);
   if (!state.running || runId !== state.runId) return;
   if (nextTab?.id) {
@@ -405,7 +455,7 @@ async function askJev(tab, pageState) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       task: state.goal,
-      textToType: state.textToType,
+      textToType: state.textToTypeSource === 'task_quote' ? '' : state.textToType,
       page: { title: tab.title || pageState.page.title || '', url: tab.url || pageState.page.url || '' },
       pageText: pageState.text,
       controls: pageState.controls,
@@ -429,6 +479,8 @@ function createDeveloperTrace(tab, pageState, decision) {
       endpoint: jev.endpoint || 'POST /v1/evaluate',
       task: state.goal,
       exactTextToEnter: state.textToType || null,
+      exactTextSource: state.textToTypeSource,
+      autoApproveReviewSteps: state.autoApprove,
       page: {
         title: tab.title || pageState.page.title || '',
         url: tab.url || pageState.page.url || ''
@@ -444,7 +496,9 @@ function createDeveloperTrace(tab, pageState, decision) {
       action: { kind: action.kind, label: actionLabel(action), control: action.control || null, text: action.text || null },
       matchProbability: decision.matchProbability,
       riskProbability: decision.riskProbability,
-      requiresReview: decision.requiresReview
+      requiresReview: decision.requiresReview,
+      autoApproveEnabled: state.autoApprove,
+      autoApproved: Boolean(decision.requiresReview && state.autoApprove)
     },
     execution: 'Decision received; execution has not started.'
   };
@@ -527,12 +581,18 @@ function appendCandidateDetail(parent, candidates, open = false) {
 function renderDecision(decision, pageState) {
   const action = decision.action;
   ui.liveSection.hidden = false;
-  ui.stepTitle.textContent = decision.requiresReview ? 'Review Jev’s choice' : 'Jev chose the next step';
+  const autoApproved = decision.requiresReview && state.autoApprove;
+  ui.stepTitle.textContent = decision.requiresReview ? (autoApproved ? 'Auto-approve is on' : 'Review Jev’s choice') : 'Jev chose the next step';
   ui.stepNumber.textContent = `STEP ${state.actionsRun + 1}`;
   ui.pageClass.textContent = prettyLabel(decision.pageType || 'other');
   ui.controlCount.textContent = `${pageState.controls.length} controls`;
   ui.actionCard.classList.toggle('is-caution', decision.requiresReview);
-  ui.actionKicker.textContent = action.kind === 'done' ? 'TASK STATUS' : action.kind === 'ask' ? 'NEEDS USER INPUT' : decision.requiresReview ? 'PAUSED FOR REVIEW' : 'NEXT ACTION';
+  ui.actionKicker.textContent = action.kind === 'done' ? 'TASK STATUS' : action.kind === 'ask' ? 'NEEDS USER INPUT' : decision.requiresReview ? (autoApproved ? 'AUTO-APPROVED STEP' : 'PAUSED FOR REVIEW') : 'NEXT ACTION';
+  ui.approveButton.hidden = !decision.requiresReview || autoApproved;
+  ui.reviewHint.hidden = !decision.requiresReview;
+  ui.reviewHint.textContent = autoApproved
+    ? 'Auto-approve is enabled for this run, so Jev’s flagged step is continuing without a manual checkpoint.'
+    : 'Jev marked this action as consequential or uncertain. Review it before allowing it to run.';
   ui.actionLabel.textContent = actionLabel(action);
   ui.actionDetail.textContent = actionDetail(action);
   ui.decisionMetrics.hidden = action.kind === 'done' || action.kind === 'ask';
@@ -702,6 +762,7 @@ function updateRunButton() {
     : '<path d="M8 5.5v13l10-6.5-10-6.5Z"/>';
   ui.taskInput.disabled = state.running;
   ui.textToType.disabled = state.running;
+  ui.autoApprove.disabled = state.running;
   ui.approveButton.disabled = !state.awaitingApproval;
 }
 

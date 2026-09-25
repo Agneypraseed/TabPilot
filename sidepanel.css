@@ -151,3 +151,16 @@ h2 { margin: 0; font-size: 13px; letter-spacing: -.02em; font-weight: 600; }
 .developer-candidate { padding: 6px; border: 1px solid #28322b; border-radius: 5px; background: #171d19; }
 .developer-candidate code { display: block; margin-bottom: 3px; color: #bce8c7; font: 8px Consolas, 'Courier New', monospace; overflow-wrap: anywhere; }
 .developer-candidate span { display: block; color: #909c92; font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.task-text-hint { margin: 6px 2px 0; color: #87958a; font-size: 9px; line-height: 1.4; }
+.advanced-field { margin-top: 9px; padding: 0 8px 8px; border: 1px solid #303932; border-radius: 7px; background: #151a16; }
+.advanced-field summary { padding: 8px 0 0; color: #9ca99e; font-size: 9px; cursor: pointer; }
+.advanced-field[open] summary { margin-bottom: 1px; }
+.advanced-field .field-label { margin-top: 7px; }
+.advanced-field input[type="text"] { height: 34px; }
+.auto-approve-toggle { display: flex; align-items: center; gap: 9px; margin: 11px 0 0; padding: 9px; border: 1px solid #3c453c; border-radius: 8px; background: #191e1a; cursor: pointer; }
+.auto-approve-toggle input { width: 15px; height: 15px; flex: 0 0 15px; margin: 0; accent-color: var(--amber); }
+.auto-approve-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.auto-approve-copy strong { color: #d9d4c5; font-size: 10px; font-weight: 600; }
+.auto-approve-copy small { color: #92988d; font-size: 8px; line-height: 1.35; }
+.per-run-tag { flex: 0 0 auto; padding: 3px 5px; border: 1px solid #4b483b; border-radius: 4px; color: #c8b98c; font: 7px Consolas, 'Courier New', monospace; letter-spacing: .06em; }
+.auto-approve-warning { margin: 6px 3px 0; padding: 7px 8px; border-left: 2px solid #c6a367; background: #211e17; color: #d1bd96; font-size: 8px; line-height: 1.45; }
