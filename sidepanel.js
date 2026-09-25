@@ -12,6 +12,9 @@ const state = {
   running: false,
   awaitingApproval: false,
   pending: null,
+  developerMode: false,
+  debugEntries: [],
+  currentDebugEntry: null,
   bridgeReady: false,
   createdTabs: new Map()
 };
@@ -48,13 +51,19 @@ const ui = {
   reviewHint: $('#reviewHint'),
   activitySection: $('#activitySection'),
   activityList: $('#activityList'),
-  actionCounter: $('#actionCounter')
+  actionCounter: $('#actionCounter'),
+  developerMode: $('#developerMode'),
+  developerSection: $('#developerSection'),
+  developerTrace: $('#developerTrace'),
+  copyTrace: $('#copyTrace')
 };
 
 document.addEventListener('DOMContentLoaded', initialize);
 ui.runButton.addEventListener('click', startOrStop);
 ui.approveButton.addEventListener('click', approvePendingStep);
 ui.refreshTab.addEventListener('click', refreshTabInfo);
+ui.developerMode.addEventListener('change', () => setDeveloperMode(ui.developerMode.checked));
+ui.copyTrace.addEventListener('click', copyDeveloperTrace);
 chrome.tabs.onCreated.addListener((tab) => state.createdTabs.set(tab.id, Date.now()));
 chrome.tabs.onRemoved.addListener((tabId) => state.createdTabs.delete(tabId));
 chrome.tabs.onActivated.addListener(() => {
@@ -62,7 +71,37 @@ chrome.tabs.onActivated.addListener(() => {
 });
 
 async function initialize() {
+  initializeDeveloperMode();
   await Promise.all([checkBridge(), refreshTabInfo()]);
+}
+
+function initializeDeveloperMode() {
+  try { state.developerMode = localStorage.getItem('tabpilotDeveloperMode') === 'true'; } catch { state.developerMode = false; }
+  ui.developerMode.checked = state.developerMode;
+  renderDeveloperTrace();
+}
+
+function setDeveloperMode(enabled) {
+  state.developerMode = enabled;
+  try { localStorage.setItem('tabpilotDeveloperMode', String(enabled)); } catch { /* The toggle still works for this panel session. */ }
+  if (!enabled) {
+    state.debugEntries = [];
+    state.currentDebugEntry = null;
+  }
+  renderDeveloperTrace();
+}
+
+async function copyDeveloperTrace() {
+  if (!state.debugEntries.length) {
+    setStatus('There is no Jev trace to copy yet. Start a task with Developer mode on.', 'ready');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(state.debugEntries, null, 2));
+    setStatus('Developer trace copied to the clipboard.', 'ready');
+  } catch {
+    setStatus('Clipboard access failed. Open a trace entry and copy its details manually.', 'error');
+  }
 }
 
 async function checkBridge() {
@@ -127,6 +166,9 @@ async function startOrStop() {
   state.textToType = ui.textToType.value;
   state.history = [];
   state.actionsRun = 0;
+  state.debugEntries = [];
+  state.currentDebugEntry = null;
+  renderDeveloperTrace();
   state.preferredTabId = tab.id;
   state.runId += 1;
   state.running = true;
@@ -183,17 +225,26 @@ async function runLoop(runId) {
       ui.pageExcerptWrap.hidden = false;
       const decision = await askJev(tab, pageState);
       if (!state.running || runId !== state.runId) return;
+      const debugEntry = state.developerMode ? createDeveloperTrace(tab, pageState, decision) : null;
+      if (debugEntry) {
+        state.debugEntries.push(debugEntry);
+        state.currentDebugEntry = debugEntry;
+      }
+      renderDeveloperTrace();
       renderDecision(decision, pageState);
 
       if (decision.action.kind === 'done') {
+        setTraceExecution('No browser input was sent: Jev selected done.');
         finishRun('Jev selected “done”. Review the task result in the browser.');
         return;
       }
       if (decision.action.kind === 'ask') {
-        finishRun('Jev could not choose a safe next step. Refine the task or inspect the page.');
+        setTraceExecution('No browser input was sent: Jev selected ask_user.');
+        finishRun('Jev chose “Ask the user”; no page action was performed. Turn on Developer mode to inspect the choices.');
         return;
       }
       if (decision.requiresReview) {
+        setTraceExecution('Paused. Waiting for your approval before sending browser input.');
         state.pending = { decision, pageState, tab };
         state.awaitingApproval = true;
         ui.approveButton.hidden = false;
@@ -214,7 +265,14 @@ async function performAndContinue(decision, pageState, tab, runId) {
   if (!state.running || runId !== state.runId) return;
   const tabsBefore = await chrome.tabs.query({});
   setStatus(actionProgressText(decision.action), 'working');
-  await executeBrowserAction(tab.id, decision.action, pageState.viewport);
+  setTraceExecution('Chrome is sending the selected input now.');
+  try {
+    await executeBrowserAction(tab.id, decision.action, pageState.viewport);
+  } catch (error) {
+    setTraceExecution('Input failed: ' + (error.message || 'Chrome could not perform the action.'));
+    throw error;
+  }
+  setTraceExecution('Chrome sent the selected browser input successfully.');
   state.actionsRun += 1;
   addHistory(tab, decision.action, 'ran');
   const nextTab = await followAfterAction(tab, tabsBefore, runId);
@@ -236,6 +294,7 @@ async function approvePendingStep() {
   try {
     const current = await chrome.tabs.get(pending.tab.id);
     if (current.url !== pending.tab.url || current.title !== pending.tab.title) {
+      setTraceExecution('Not performed. The page changed while approval was pending; Jev is rechecking it.');
       state.pending = null;
       state.awaitingApproval = false;
       ui.approveButton.hidden = true;
@@ -251,7 +310,14 @@ async function approvePendingStep() {
     ui.approveButton.hidden = true;
     ui.reviewHint.hidden = true;
     const tabsBefore = await chrome.tabs.query({});
-    await executeBrowserAction(pending.tab.id, pending.decision.action, pending.pageState.viewport);
+    setTraceExecution('Chrome is sending the approved input now.');
+    try {
+      await executeBrowserAction(pending.tab.id, pending.decision.action, pending.pageState.viewport);
+    } catch (error) {
+      setTraceExecution('Input failed: ' + (error.message || 'Chrome could not perform the approved action.'));
+      throw error;
+    }
+    setTraceExecution('Chrome sent the approved browser input successfully.');
     state.actionsRun += 1;
     addHistory(pending.tab, pending.decision.action, 'approved and ran');
     const nextTab = await followAfterAction(pending.tab, tabsBefore, runId);
@@ -352,6 +418,112 @@ async function askJev(tab, pageState) {
   return result;
 }
 
+function createDeveloperTrace(tab, pageState, decision) {
+  const jev = decision.debug || {};
+  const action = decision.action;
+  return {
+    step: state.debugEntries.length + 1,
+    timestamp: new Date().toISOString(),
+    request: {
+      model: jev.model || 'typesafe-ai/jev',
+      endpoint: jev.endpoint || 'POST /v1/evaluate',
+      task: state.goal,
+      exactTextToEnter: state.textToType || null,
+      page: {
+        title: tab.title || pageState.page.title || '',
+        url: tab.url || pageState.page.url || ''
+      },
+      visiblePageText: pageState.text,
+      visibleControls: pageState.controls,
+      recentActions: state.history.slice(-8)
+    },
+    availableActions: jev.availableActions || [],
+    selection: jev.selection || null,
+    review: jev.review || null,
+    result: {
+      action: { kind: action.kind, label: actionLabel(action), control: action.control || null, text: action.text || null },
+      matchProbability: decision.matchProbability,
+      riskProbability: decision.riskProbability,
+      requiresReview: decision.requiresReview
+    },
+    execution: 'Decision received; execution has not started.'
+  };
+}
+
+function setTraceExecution(message) {
+  if (!state.currentDebugEntry) return;
+  state.currentDebugEntry.execution = message;
+  renderDeveloperTrace();
+}
+
+function renderDeveloperTrace() {
+  ui.developerSection.hidden = !state.developerMode;
+  if (!state.developerMode) return;
+  ui.developerTrace.replaceChildren();
+  if (!state.debugEntries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'developer-empty';
+    empty.textContent = 'No trace yet. Start a task with Developer mode on to record the page snapshot and Jev’s choices.';
+    ui.developerTrace.append(empty);
+    return;
+  }
+
+  const entries = state.debugEntries.slice(-MAX_STEPS).reverse();
+  for (const entry of entries) {
+    const card = document.createElement('details');
+    card.className = 'developer-entry';
+    card.open = entry === state.debugEntries[state.debugEntries.length - 1];
+    const summary = document.createElement('summary');
+    const selected = entry.selection?.returnedChoice || entry.selection?.resolvedChoice || 'choice missing';
+    summary.textContent = 'Step ' + entry.step + ' · ' + selected + ' · ' + entry.result.action.label;
+    const outcome = document.createElement('p');
+    outcome.className = 'developer-result';
+    outcome.textContent = entry.execution;
+    card.append(summary, outcome);
+
+    appendJsonDetail(card, 'Page snapshot and task sent through the bridge', entry.request);
+    appendCandidateDetail(card, entry.availableActions, entry.result.action.kind === 'ask');
+    appendJsonDetail(card, 'Jev’s typed answers', entry.selection || { error: 'No selection details returned.' }, true);
+    appendJsonDetail(card, 'Task match and consequence check', entry.review || { performed: false, note: 'Jev selected ask_user or done; this review call was skipped.' });
+    appendJsonDetail(card, 'Final decision', entry.result, true);
+    ui.developerTrace.append(card);
+  }
+}
+
+function appendJsonDetail(parent, label, value, open = false) {
+  const details = document.createElement('details');
+  details.className = 'developer-detail';
+  details.open = open;
+  const summary = document.createElement('summary');
+  summary.textContent = label;
+  const pre = document.createElement('pre');
+  pre.textContent = JSON.stringify(value, null, 2);
+  details.append(summary, pre);
+  parent.append(details);
+}
+
+function appendCandidateDetail(parent, candidates, open = false) {
+  const details = document.createElement('details');
+  details.className = 'developer-detail';
+  details.open = open;
+  const summary = document.createElement('summary');
+  summary.textContent = 'Action choices offered to Jev (' + candidates.length + ')';
+  const list = document.createElement('ol');
+  list.className = 'developer-candidates';
+  for (const candidate of candidates) {
+    const item = document.createElement('li');
+    item.className = 'developer-candidate';
+    const key = document.createElement('code');
+    key.textContent = candidate.key;
+    const description = document.createElement('span');
+    description.textContent = candidate.description;
+    item.append(key, description);
+    list.append(item);
+  }
+  details.append(summary, list);
+  parent.append(details);
+}
+
 function renderDecision(decision, pageState) {
   const action = decision.action;
   ui.liveSection.hidden = false;
@@ -374,6 +546,7 @@ function actionLabel(action) {
   if (action.kind === 'type') return `Enter the supplied text in “${controlLabel(action.control)}”`;
   if (action.kind === 'scroll') return `Scroll ${action.direction}`;
   if (action.kind === 'key') return `Press ${action.key}`;
+  if (action.kind === 'ask') return 'Ask you what to do next';
   if (action.kind === 'done') return 'Task appears complete';
   return 'Jev needs you to decide what to do next';
 }
@@ -382,7 +555,7 @@ function actionDetail(action) {
   if (action.control?.href) return displayUrl(action.control.href);
   if (action.kind === 'type') return `Text: ${action.text}`;
   if (action.kind === 'move') return 'Moves the pointer without clicking.';
-  if (action.kind === 'ask') return 'No listed action clearly fits the task.';
+  if (action.kind === 'ask') return 'Jev returned ask_user. No browser input was sent. Turn on Developer mode to inspect the available actions.';
   if (action.kind === 'done') return 'Jev selected the completion option.';
   return '';
 }

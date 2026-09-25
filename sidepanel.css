@@ -124,3 +124,30 @@ h2 { margin: 0; font-size: 13px; letter-spacing: -.02em; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+.developer-toggle { display: flex; align-items: center; gap: 9px; margin-top: 10px; padding: 9px 2px 0; border-top: 1px solid #252d27; cursor: pointer; }
+.developer-toggle input { width: 14px; height: 14px; flex: 0 0 14px; margin: 0; accent-color: var(--mint); }
+.developer-toggle-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.developer-toggle-copy strong { color: #c8d1c9; font-size: 10px; font-weight: 600; }
+.developer-toggle-copy small { color: var(--quiet); font-size: 8px; }
+.developer-tag { padding: 3px 5px; border: 1px solid #35443a; border-radius: 4px; color: #9cb3a0; font-family: Consolas, 'Courier New', monospace; font-size: 7px; letter-spacing: .08em; }
+.developer-section { margin-top: 14px; padding: 11px; border: 1px solid #35443a; border-radius: 10px; background: #141915; }
+.developer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.developer-heading .eyebrow { color: #8ba193; font-size: 8px; }
+.developer-heading h2 { margin-top: 3px; font-size: 12px; }
+.copy-trace-button { padding: 6px 8px; border: 1px solid #3b4a40; border-radius: 6px; background: #1c241e; color: #becbbf; font-size: 9px; cursor: pointer; }
+.copy-trace-button:hover { border-color: #67806d; color: var(--text); }
+.developer-note { margin: 8px 0; color: #89958b; font-size: 8px; line-height: 1.5; }
+.developer-trace { display: flex; flex-direction: column; gap: 7px; }
+.developer-empty { margin: 0; padding: 9px; border: 1px dashed #354139; border-radius: 6px; color: #8b968d; font-size: 9px; line-height: 1.45; }
+.developer-entry { min-width: 0; padding: 8px; border: 1px solid #303b33; border-radius: 7px; background: #191f1b; }
+.developer-entry > summary, .developer-detail > summary { color: #d9e3db; font-size: 9px; font-weight: 600; cursor: pointer; }
+.developer-entry > summary { overflow-wrap: anywhere; }
+.developer-result { margin: 7px 0; padding: 6px 7px; border-left: 2px solid #8acb9d; background: #17211a; color: #b6c9ba; font-size: 8px; line-height: 1.45; overflow-wrap: anywhere; }
+.developer-detail { margin-top: 7px; padding: 7px; border: 1px solid #2c352e; border-radius: 6px; background: #141815; }
+.developer-detail > summary { color: #aebbb0; font-size: 8px; }
+.developer-detail pre { max-height: 230px; overflow: auto; margin: 7px 0 0; color: #98a59a; font: 8px/1.5 Consolas, 'Courier New', monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.developer-candidates { display: flex; max-height: 240px; flex-direction: column; gap: 5px; overflow: auto; margin: 7px 0 0; padding: 0; list-style: none; }
+.developer-candidate { padding: 6px; border: 1px solid #28322b; border-radius: 5px; background: #171d19; }
+.developer-candidate code { display: block; margin-bottom: 3px; color: #bce8c7; font: 8px Consolas, 'Courier New', monospace; overflow-wrap: anywhere; }
+.developer-candidate span { display: block; color: #909c92; font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }

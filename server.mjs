@@ -54,7 +54,9 @@ const server = createServer(async (request, response) => {
       .replace('No active tab', 'TabPilot local demo')
       .replace('Open a web page to get started', 'http://127.0.0.1:4311/demo')
       .replace('<button class="primary-button" id="runButton" type="button">', '<button class="primary-button" id="runButton" type="button" disabled>')
-      .replace('</button>\n      </section>\n\n      <div class="status-line"', '</button>\n        <p class="review-hint" style="display:block">This is a visual preview in Codex. Run tasks from the TabPilot side panel in Chrome.</p>\n      </section>\n\n      <div class="status-line"');
+      .replace('<input id="developerMode" type="checkbox">', '<input id="developerMode" type="checkbox" disabled>')
+      .replace('<label class="developer-toggle" for="developerMode">', '<p class="review-hint" style="display:block">Static preview only. Use Developer mode in the actual Chrome extension to capture a live Jev trace.</p>\n        <label class="developer-toggle" for="developerMode">')
+      .replace('</button>\n      </section>\n\n      <div class="status-line"', '</button>\n        <p class="review-hint" style="display:block">Static preview only. Use Developer mode in the TabPilot Chrome extension to see live Jev traces.</p>\n      </section>\n\n      <div class="status-line"');
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     response.end(preview);
     return;
@@ -261,9 +263,12 @@ function cleanText(value, limit) {
 function makeActionOptions(controls, textToType) {
   const options = {};
   const actionMap = new Map();
+  const actionEntries = [];
   const add = (id, description, action) => {
-    options[id] = description.slice(0, 350);
+    const cleanDescription = description.slice(0, 350);
+    options[id] = cleanDescription;
     actionMap.set(id, action);
+    actionEntries.push({ key: id, description: cleanDescription });
   };
 
   for (const control of controls) {
@@ -289,11 +294,11 @@ function makeActionOptions(controls, textToType) {
   add('press_escape', 'Press Escape to dismiss or leave the current interaction.', { kind: 'key', key: 'Escape' });
   add('done', 'The user task is already complete. Stop without taking another action.', { kind: 'done' });
   add('ask_user', 'The next action is unclear, blocked, or needs a user decision. Stop and ask the user.', { kind: 'ask' });
-  return { options, actionMap };
+  return { options, actionMap, actionEntries };
 }
 
 async function decideNextStep({ task, textToType, page, pageText, controls, history }) {
-  const { options, actionMap } = makeActionOptions(controls, textToType);
+  const { options, actionMap, actionEntries } = makeActionOptions(controls, textToType);
   const state = JSON.stringify({
     userTask: task,
     exactTextProvidedByUser: textToType || null,
@@ -323,11 +328,27 @@ async function decideNextStep({ task, textToType, page, pageText, controls, hist
   });
 
   const answers = selection?.answers || {};
-  const selectedKey = String(answers.nextAction?.choice || 'ask_user');
-  const action = actionMap.get(selectedKey) || actionMap.get('ask_user');
+  const returnedChoice = typeof answers.nextAction?.choice === 'string' ? answers.nextAction.choice : '';
+  const selectedKey = returnedChoice || 'ask_user';
+  const choiceMatchedCandidate = actionMap.has(selectedKey);
+  const action = choiceMatchedCandidate ? actionMap.get(selectedKey) : actionMap.get('ask_user');
   const pageType = String(answers.pageType?.choice || 'other');
+  const debug = {
+    model: 'typesafe-ai/jev',
+    endpoint: 'POST /v1/evaluate',
+    evaluationCount: 1,
+    availableActions: actionEntries,
+    selection: {
+      returnedChoice: returnedChoice || null,
+      resolvedChoice: choiceMatchedCandidate ? selectedKey : 'ask_user',
+      choiceMatchedCandidate,
+      pageType: summarizeJevAnswer(answers.pageType),
+      nextAction: summarizeJevAnswer(answers.nextAction)
+    },
+    review: null
+  };
   if (action.kind === 'done' || action.kind === 'ask') {
-    return { pageType, action, matchProbability: 1, riskProbability: 0, requiresReview: false, shouldStop: true };
+    return { pageType, action, matchProbability: null, riskProbability: null, requiresReview: false, shouldStop: true, debug };
   }
 
   const review = await gatewayRequest('/v1/evaluate', {
@@ -354,6 +375,12 @@ async function decideNextStep({ task, textToType, page, pageText, controls, hist
   const reviewAnswers = review?.answers || {};
   const matchProbability = readProbability(reviewAnswers.matchesTask);
   const riskProbability = readProbability(reviewAnswers.consequential);
+  debug.evaluationCount = 2;
+  debug.review = {
+    matchesTask: summarizeJevAnswer(reviewAnswers.matchesTask),
+    consequential: summarizeJevAnswer(reviewAnswers.consequential),
+    autoRunThresholds: { minimumTaskMatch: 0.8, maximumConsequenceRisk: 0.2 }
+  };
   const requiresReview = matchProbability < 0.8 || riskProbability >= 0.2 || matchProbability === null || riskProbability === null;
   return {
     pageType,
@@ -361,8 +388,18 @@ async function decideNextStep({ task, textToType, page, pageText, controls, hist
     matchProbability: matchProbability ?? 0,
     riskProbability: riskProbability ?? 1,
     requiresReview,
-    shouldStop: false
+    shouldStop: false,
+    debug
   };
+}
+
+function summarizeJevAnswer(answer) {
+  if (!answer || typeof answer !== 'object') return answer == null ? null : { value: String(answer).slice(0, 100) };
+  const summary = {};
+  if (typeof answer.choice === 'string') summary.choice = answer.choice;
+  if (typeof answer.probability === 'number' && Number.isFinite(answer.probability)) summary.probability = answer.probability;
+  if (typeof answer.confidence === 'number' && Number.isFinite(answer.confidence)) summary.confidence = answer.confidence;
+  return Object.keys(summary).length ? summary : null;
 }
 
 function summarizeAction(action) {

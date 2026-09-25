@@ -65,6 +65,11 @@
           <span id="runButtonText">Start task</span>
           <span class="button-arrow" id="runButtonArrow" aria-hidden="true">↗</span>
         </button>
+        <label class="developer-toggle" for="developerMode">
+          <input id="developerMode" type="checkbox">
+          <span class="developer-toggle-copy"><strong>Developer mode</strong><small>Show what Jev saw, chose, and what ran</small></span>
+          <span class="developer-tag">LOCAL</span>
+        </label>
       </section>
 
       <div class="status-line" id="statusLine" role="status" aria-live="polite">
@@ -119,6 +124,18 @@
           <span id="actionCounter">0 actions</span>
         </div>
         <ol class="activity-list" id="activityList"></ol>
+      </section>
+
+      <section class="developer-section" id="developerSection" hidden aria-label="Developer decision trace">
+        <div class="developer-heading">
+          <div>
+            <div class="eyebrow">DEBUG VIEW</div>
+            <h2>Decision trace</h2>
+          </div>
+          <button class="copy-trace-button" id="copyTrace" type="button">Copy trace</button>
+        </div>
+        <p class="developer-note">Jev returns typed choices, not written reasoning. This shows the page snapshot, choices it was offered, returned answers, and whether Chrome ran the action. Trace stays in this panel session.</p>
+        <div class="developer-trace" id="developerTrace" aria-live="polite"></div>
       </section>
 
       <footer class="footer">
