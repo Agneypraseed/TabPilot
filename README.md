@@ -9,7 +9,7 @@ Jev is a typed decision model.
    Put your key in the local `.env` file:
 
    ```text
-   AI_GATEWAY_API_KEY=your_key_here
+   AI_GATEWAY_API_KEY=########
    ```
    ```
    npm start
