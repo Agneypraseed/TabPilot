@@ -1,14 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "TabPilot — Jev Browser Assistant",
-  "version": "0.1.0",
-  "description": "Use Jev to read page text, choose browser actions, and follow a task across tabs.",
+  "name": "TabPilot — Browser Agent",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo0ce2cDFZ5nAjdSWrUdE+g4JCw3Nr6B7xwsIEJMEQORmhDRojyT8r2cqiIxQ7Jrydn5UUkwWQ/qdKsm6RtKqXO42zWlU/XQUxzPepR7ak4IjGkSLg0gswkDvXWH1fi0N4gMmOarn4CdIWvnD4j//O5ozKZJylu73PNQmS7E260Iyud69mXsBM4AOOtrzEUkAjybezYCZsKoi9tAOH4aJ8ArmxkeeTWF2w9AT+JetlgC/VXIyBQxNB7uB85hDXYRydMNp4mtrPXxm3fY6E1V9E7hj0LUtxl95Lc1HuRODvmXCfsOe/sen9KII2vdsqIJZGmv/O6bJdxqqzJ46FLRTtwIDAQAB",
+  "version": "0.2.0",
+  "description": "Run local Qwen or experimental Gemma models for browser tasks, with optional hosted providers and Playwright/CLI/MCP access.",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "debugger",
+    "downloads",
     "scripting",
     "sidePanel",
+    "storage",
     "tabs",
     "windows"
   ],
@@ -17,6 +20,9 @@
     "http://*/*",
     "https://*/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' http://127.0.0.1:4311 ws://127.0.0.1:4311 https://huggingface.co https://*.huggingface.co https://hf.co https://*.hf.co https://*.xethub.hf.co https://raw.githubusercontent.com"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"

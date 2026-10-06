@@ -1,13 +1,34 @@
 {
-  "name": "tabpilot-jev",
-  "version": "0.1.0",
+  "name": "tabpilot",
+  "version": "0.2.0",
   "private": true,
-  "description": "A Jev-only browser agent that reads page text and chooses bounded actions.",
+  "description": "A multi-model Chrome agent with a local Playwright relay, CLI and MCP server.",
   "type": "module",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "build": "node build-extension.mjs",
+    "test": "node --test",
+    "verify:click": "npm run build && node verification/local-cpu.mjs qwen",
+    "verify:local-models": "npm run build && node verification/local-cpu.mjs",
+    "verify:hosted": "npm run build && node verification/click.mjs",
+    "cli": "node cli.mjs",
+    "mcp": "node mcp.mjs"
+  },
+  "bin": {
+    "tabpilot": "./cli.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "@mlc-ai/web-llm": "^0.2.85",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "playwright-core": "1.63.0",
+    "ws": "^8.22.0",
+    "zod": "^4.3.6"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }
