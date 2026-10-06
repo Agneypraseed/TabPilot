@@ -57,20 +57,20 @@ Configure your MCP client to start `mcp.mjs` from this directory. For example, i
 
 The server provides `browser_tabs`, `browser_snapshot`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_hover`, `browser_press`, `browser_scroll`, `browser_select`, `browser_open`, `browser_close`, and `browser_screenshot`. Click, fill, and other element actions use accessible locators. Browser operations stay in the local Chrome profile and require the tab to be enabled in the extension.
 
-## Local services and security
+## Setup
 
-The optional decision API and authenticated Playwright CDP relay bind only to `127.0.0.1:4311`. A random bridge credential is stored in the ignored `.tabpilot/bridge.json`; the signed TabPilot extension is the only Chrome extension allowed to retrieve it. Provider credentials remain in `.env` and are never returned by the health or provider-list endpoints. Do not expose the bridge port to a network.
+   Put your key in the local `.env` file:
 
-Direct provider variables are `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY`. Add the matching `*_MODEL` variable to set the initial model. For local or compatible inference servers, set `COMPATIBLE_BASE_URL`, `COMPATIBLE_MODEL`, and optionally `COMPATIBLE_API_KEY`. Loopback HTTP endpoints are supported; other endpoints must use HTTPS. Jev remains available through `AI_GATEWAY_API_KEY`.
+   ```text
+   AI_GATEWAY_API_KEY=########
+   ```
+   ```
+   npm start
+   ```
 
-The task panel identifies buttons from visible DOM text, accessibility labels (`aria-label`, `aria-labelledby`, associated labels), and image alt text. It also reads controls inside open shadow roots. A vision model is unnecessary for these controls. Canvas controls and images without accessible DOM labels need a separate vision implementation; iframe controls are not included in the panel's current snapshot.
+In Chrome, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this project folder.
+Open a regular website tab, click the TabPilot extension button, describe your task
 
-Before clicking, the extension verifies that the selected DOM element still exists, has the same meaning, remains enabled and visible, and is not covered. It uses the element's current position rather than coordinates saved before model inference. The input goes through Chrome's debugger mouse events, so the page receives a real browser click.
 
-CPU inference needs sufficient RAM and can take time, especially on the first run. Chrome may prevent debugger attachment to protected pages or while DevTools is attached. If Chrome reports that it cannot find a WebGPU adapter, select either CPU model. The CPU path never requests a GPU adapter. An AMD driver timeout occurred during an earlier GPU test on this machine; CPU models are now the default.
-
-To use local inference, reload the extension from `dist`, select **On-device · local models**, then **Qwen2.5 · 0.5B · CPU** or **Gemma 3 · 270M · CPU**. Ask it to click a named button on a regular web page. GPU options require a compatible, stable WebGPU device; they are not used by the local CPU verification.
-
-Run `npm run verify:click` for local Qwen model-to-browser verification. It builds the extension, loads the CPU model in an isolated Chrome profile with GPU disabled and hosted inference blocked, and tests choosing the correct button among competing controls, a trusted browser click, and recognition of the completed result. Evidence is saved under `.test-artifacts/local-cpu`; model downloads are retained in `.cache/local-cpu-profile` for subsequent runs. `npm run verify:local-models` also includes experimental Gemma and reports its failures. Test one model with `node verification/local-cpu.mjs qwen` or `gemma` after building. Add `--offline` to test using cached weights with Chrome offline, `--auto` to exercise auto-approved actions, or `--menu` for a two-step menu/shadow-DOM task. The harness approves only the requested fixture control, records approvals, and fails on a wrong selection or premature completion.
-
-The separate `npm run verify:hosted` suite uses real hosted API calls and may incur charges. It checks layout changes, menus, shadow DOM, stale/covered controls, and CLI/MCP operations. It requires configured provider credentials and is not part of the default local verification.
+## Current limits
+- The agent can only choose controls it can read from the page DOM. It cannot see pixels, interpret images, or operate controls drawn only on a canvas.
