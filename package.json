@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "cli": "node cli.mjs",
-    "test": "node --test test/bridge.test.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "engines": { "node": ">=22" },
   "dependencies": { "ws": "8.22.0" }
