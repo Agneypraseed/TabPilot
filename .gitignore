@@ -1,0 +1,16 @@
+# Installed dependencies and generated build output
+node_modules/
+dist/
+
+# Local caches, runtime data, and test artifacts
+.cache/
+.tabpilot/
+.test-artifacts/
+
+# Local environment settings; keep example configuration trackable
+.env
+.env.*
+!.env.example
+
+# Local logs
+*.log

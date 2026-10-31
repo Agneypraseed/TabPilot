@@ -2,6 +2,14 @@
   "manifest_version": 3,
   "name": "TabPilot",
   "version": "0.1.0",
-  "description":"Gives LLM computer use on Browser", 
-  "action.default_popup":"popup.html"
+  "description": "Gives LLM computer use on Browser",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
 }
