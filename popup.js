@@ -5,6 +5,32 @@ const snapshotOutput = document.getElementById("snapshot-output");
 
 let enabled = false;
 
+const bridgeToken = document.getElementById("bridge-token");
+const connectButton = document.getElementById("connect-bridge");
+const bridgeStatus = document.getElementById("bridge-status");
+
+chrome.runtime.sendMessage({ type: "tabpilot:bridge-status" }).then((response) => {
+    bridgeStatus.textContent = response?.connected ? "Bridge connected" : "Bridge disconnected";
+}).catch((error) => { bridgeStatus.textContent = error.message; });
+
+connectButton.addEventListener("click", async () => {
+    connectButton.disabled = true;
+    bridgeStatus.textContent = "Connecting…";
+    try {
+        const response = await chrome.runtime.sendMessage({
+            type: "tabpilot:connect",
+            token: bridgeToken.value.trim()
+        });
+        if (!response?.ok) throw new Error(response?.error ?? "Connection failed.");
+        bridgeToken.value = "";
+        bridgeStatus.textContent = "Bridge connected";
+    } catch (error) {
+        bridgeStatus.textContent = error.message;
+    } finally {
+        connectButton.disabled = false;
+    }
+});
+
 chrome.tabs
     .query({ active: true, currentWindow: true })
     .then(async ([tab]) => {
