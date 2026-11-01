@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { loadBridgeConfig, requestBridge } from "./bridge-client.mjs";
 
 async function main() {
     const [command, tabId, ...extra] = process.argv.slice(2);
@@ -6,30 +6,13 @@ async function main() {
         (command === 'snapshot' ? !/^\d+$/.test(tabId ?? '') : tabId !== undefined)) {
         throw new Error("Usage: node cli.mjs pair | tabs | snapshot <tab-id>");
     }
-    let config;
-    try {
-        config = JSON.parse(await readFile(new URL(".tabpilot/bridge.json", import.meta.url), "utf8"));
-    } catch {
-        throw new Error("Start the local bridge with npm start first.");
-    }
-    // Do not send the token to a URL supplied by a modified configuration file.
-    if (config.url !== "http://127.0.0.1:4311" || typeof config.token !== "string") {
-        throw new Error("Invalid bridge configuration. Restart the bridge.");
-    }
     if (command === "pair") {
+        const config = await loadBridgeConfig();
         console.log(config.token);
         return;
     }
-    const path = command === "tabs" ? "/tabs" : `/snapshot/${tabId}`;
-    const response = await fetch(config.url + path, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${config.token}` },
-        signal: AbortSignal.timeout(12000),
-        redirect: "error"
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(result.error ?? "Bridge request failed.");
-    console.log(JSON.stringify(result.data, null, 2));
+    const data = await requestBridge(command, command === "snapshot" ? Number(tabId) : undefined);
+    console.log(JSON.stringify(data, null, 2));
 }
 
 main().catch((error) => {

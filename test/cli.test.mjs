@@ -18,6 +18,7 @@ test("CLI validates arguments and local configuration without exposing a token t
     });
     const script = join(directory, "cli.mjs");
     await copyFile(new URL("../cli.mjs", import.meta.url), script);
+    await copyFile(new URL("../bridge-client.mjs", import.meta.url), join(directory, "bridge-client.mjs"));
     await assert.rejects(execute(process.execPath, [script, "unknown"]), error => {
         assert.match(error.stderr, /Usage/);
         assert.equal(error.code, 1);

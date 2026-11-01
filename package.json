@@ -6,8 +6,13 @@
   "scripts": {
     "start": "node server.mjs",
     "cli": "node cli.mjs",
+    "mcp": "node mcp.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "engines": { "node": ">=22" },
-  "dependencies": { "ws": "8.22.0" }
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "ws": "8.22.0",
+    "zod": "4.6.5"
+  }
 }
