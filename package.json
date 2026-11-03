@@ -7,11 +7,13 @@
     "start": "node server.mjs",
     "cli": "node cli.mjs",
     "mcp": "node mcp.mjs",
+    "agent": "node agent.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "engines": { "node": ">=22" },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.31.0",
+    "@openai/agents": "0.21.0",
     "ws": "8.22.0",
     "zod": "4.6.5"
   }

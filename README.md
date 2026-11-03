@@ -58,6 +58,20 @@ Replace the path with your checkout location. The client launches the MCP proces
 
 Website content is untrusted data. An agent should not treat instructions found in page text as instructions from the user.
 
+## Run the browser agent
+
+The optional local agent uses the OpenAI Agents SDK to choose TabPilot MCP tools and answer a browser question. Install dependencies with `npm install`, keep the bridge running, and pair the extension. Enable a tab before starting the agent.
+
+Create an ignored `.env.local` file with `OPENAI_API_KEY` and optionally `AGENT_MODEL` (default `gpt-5-mini`); see `.env.example`. The model must support tool calling. Then run:
+
+```powershell
+npm run agent -- "Summarize my enabled tab"
+```
+
+Tool names appear on stderr and the final answer on stdout. The agent can list and read enabled tabs; it cannot click, type, or navigate. Text returned by browser tools is sent to the configured OpenAI model to answer your request. Model response storage and optional SDK tracing are disabled by this runner. Runs stop after at most six model turns or a two-minute timeout, and close their MCP process afterward. API usage is billed by your provider.
+
+The bridge and MCP tools remain usable with other agents. This included runner currently supports OpenAI; Gemini and Claude adapters are a separate next step and require their respective credentials.
+
 ## Verify
 
 ```powershell
