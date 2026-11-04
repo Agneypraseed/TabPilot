@@ -20,7 +20,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access", "tabpilot:agent", "tabpilot:ui-state", "tabpilot:disconnect"].includes(message?.type)) return false;
 
     // Only our extension pages can request snapshots through this handler.
-    if (sender.id !== chrome.runtime.id || sender.tab) {
+    const ownExtensionPage = typeof sender.url === "string" && sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+    if (sender.id !== chrome.runtime.id || (sender.tab && !ownExtensionPage)) {
         sendResponse({ ok: false, error: "Snapshots must be requested by an extension page." });
         return false;
     }
@@ -65,7 +66,7 @@ function requestAgent(method, payload = {}) {
 }
 
 function publishAgentState(state) {
-    if (agentState && state?.revision < agentState.revision) return;
+    if (agentState && state?.sessionId === agentState.sessionId && state?.revision < agentState.revision) return;
     agentState = state;
     // No panel may be open; losing a UI observer is not a runtime error.
     chrome.runtime.sendMessage?.({ type: "tabpilot:agent-event", state }).catch(() => {});

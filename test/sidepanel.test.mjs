@@ -81,3 +81,13 @@ test("workspace falls back to an extension tab when the browser cannot create wi
     assert.equal(created.url, "chrome-extension://test/sidepanel.html?window=7&tab=12");
     assert.equal(created.active, true);
 });
+
+test("a restarted bridge replaces old high-revision state instead of appearing permanently stuck", async () => {
+    const ui = await panel();
+    ui.receive({ ...ui.agent, sessionId: "old-runtime", revision: 80, status: "running", mode: "computer", tabId: 12 });
+    assert.equal(ui.document.getElementById("run-controls").hidden, false);
+    ui.receive({ ...ui.agent, sessionId: "new-runtime", revision: 0, status: "idle", events: [] });
+    assert.equal(ui.document.getElementById("run-controls").hidden, true);
+    ui.receive({ ...ui.agent, sessionId: "new-runtime", revision: -1, status: "running", mode: "computer", tabId: 12 });
+    assert.equal(ui.document.getElementById("run-controls").hidden, true, "out-of-order messages from the same runtime are ignored");
+});

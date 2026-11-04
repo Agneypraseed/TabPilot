@@ -58,6 +58,10 @@ Pause is a checkpoint, not a browser rollback. New guidance received during a mo
 
 UI tests in `test/sidepanel.test.mjs` exercise the actual DOM controller with simulated Chrome APIs. `verification/ui-preview-server.mjs` serves the same UI with explicitly simulated data for browser layout checks; it never runs a model or connects to the bridge. Runtime tests exercise actual SDK tool loops and authenticated WebSocket state/control messages. Live browser verification is separate.
 
+UI feature commits: `af76d8b` adds the complete agent interface and settings; `2bac618` adapts it to embedded browsers with a popup and persistent workspace. Recovery checks additionally ensure a restarted bridge can replace older high-revision UI state, trusted extension workspace tabs can send messages, and mid-run guidance remains in follow-up conversation history. The SDK input filter alone does not retain inserted guidance in `result.history`, so the runner explicitly saves those user messages before the final answer.
+
+Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The user submitted the task through the extension UI and confirmed its activity/screenshot display; a separate CLI read verified Visitor name `UI Test`, delivery `express`, and Gift wrap checked. The practice backend contained no submitted order with that visitor name. No payment or external communication was performed. Direct automation of the extension workspace was blocked by the browser tool's URL policy, so the live UI interaction was user-operated rather than falsely claimed as tool-operated.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.

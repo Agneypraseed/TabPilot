@@ -74,6 +74,7 @@ export async function runBrowserAgent(prompt, {
         });
         const runner = new Runner({ tracingDisabled: true, modelSettings: { parallelToolCalls: false } });
         const toolCalls = [];
+        const appliedGuidance = [];
         runner.on("agent_tool_start", (_context, _agent, tool) => {
             toolCalls.push(tool.name);
             onToolCall(tool.name);
@@ -84,11 +85,18 @@ export async function runBrowserAgent(prompt, {
                 await checkpoint();
                 signal.throwIfAborted();
                 const guidance = getSteering();
+                appliedGuidance.push(...guidance);
                 return { ...modelData, input: [...modelData.input, ...guidance.map(content => ({ role: "user", content }))] };
             }
         });
         if (!result.finalOutput) throw new Error("The model returned no final answer.");
-        return { answer: result.finalOutput, toolCalls, history: result.history };
+        // The SDK's input filter changes model input, but result.history does not
+        // retain inserted messages. Keep accepted guidance before the final reply
+        // so a follow-up remembers the user's changes to the task.
+        const nextHistory = [...result.history];
+        const missing = appliedGuidance.filter(content => !nextHistory.some(item => item.role === "user" && item.content === content));
+        nextHistory.splice(Math.max(0, nextHistory.length - 1), 0, ...missing.map(content => ({ role: "user", content })));
+        return { answer: result.finalOutput, toolCalls, history: nextHistory };
     } finally {
         await server.close();
     }

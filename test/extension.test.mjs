@@ -38,6 +38,16 @@ test("background rejects content-script and foreign-extension requests", async (
     assert.equal(worker.executions, 0);
 });
 
+test("a trusted extension workspace tab can use the same API as the popup", async () => {
+    const worker = background();
+    const response = await worker.request(12, { id: "test", tab: { id: 50 }, url: "chrome-extension://test/sidepanel.html" });
+    assert.equal(response.ok, true);
+    assert.equal(worker.executions, 1);
+    const rejected = await worker.request(12, { id: "test", tab: { id: 12 }, url: "https://example.com/sidepanel.html" });
+    assert.equal(rejected.ok, false);
+    assert.equal(worker.executions, 1);
+});
+
 test("invalid tab IDs and protected pages never execute a reader", async () => {
     const worker = background({ url: "chrome://extensions/" });
     for (const id of [undefined, "12", -1, 1.5]) {

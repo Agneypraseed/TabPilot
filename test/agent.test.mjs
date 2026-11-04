@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { MCPServerStdio, Usage } from "@openai/agents";
 import { runBrowserAgent } from "../agent.mjs";
+import { AgentService } from "../agent-service.mjs";
 
 function fixtureServer() {
     return new MCPServerStdio({
@@ -115,4 +116,63 @@ test("SDK incorporates mid-run guidance before executing a newly proposed obsole
     await runBrowserAgent("Read the page", { server, model, targetTabId: 12,
         hasSteering: () => pending.length > 0, getSteering: () => pending.splice(0) });
     assert.equal(rawCalls, 0, "obsolete action must never reach the browser");
+});
+
+test("session pause, steering, and resume gate actual SDK/MCP tool dispatch", { timeout: 15000 }, async () => {
+    let service, turns = 0, snapshotCalls = 0;
+    const server = fixtureServer();
+    const raw = server.callToolResult.bind(server);
+    server.callToolResult = async (...args) => { if (args[0] === "browser_snapshot") snapshotCalls++; return raw(...args); };
+    const model = {
+        async getResponse(request) {
+            if (++turns === 1) {
+                await service.command("pause", { runId: service.state.runId });
+                return call("browser_snapshot", { tabId: 12 }, turns);
+            }
+            assert.match(JSON.stringify(request.input), /Only explain the title/);
+            return { usage: new Usage({ requests: 1 }), output: [{ type: "message", role: "assistant", status: "completed",
+                content: [{ type: "output_text", text: "Guidance applied." }] }] };
+        }, async *getStreamedResponse() {}
+    };
+    service = new AgentService({ env: { OPENAI_API_KEY: "fixture-key", AGENT_MODEL: "fixture" },
+        configure: async () => ({ model, modelSettings: {}, close: async () => {} }),
+        run: (prompt, options) => runBrowserAgent(prompt, { ...options, server }) });
+    const paused = new Promise(resolve => {
+        const unsubscribe = service.subscribe(state => { if (state.status === "paused") { unsubscribe(); resolve(); } });
+    });
+    await service.command("start", { prompt: "Read", tabId: 12, mode: "browser" });
+    await paused;
+    assert.equal(snapshotCalls, 0);
+    await service.command("steer", { runId: service.state.runId, text: "Only explain the title" });
+    await service.command("resume", { runId: service.state.runId });
+    await service.running;
+    assert.equal(service.state.status, "completed");
+    assert.equal(snapshotCalls, 0);
+    assert.match(JSON.stringify(service.history), /Only explain the title/);
+});
+
+test("Stop aborts a paused SDK run without dispatching the pending browser action", { timeout: 15000 }, async () => {
+    let service, browserActions = 0;
+    const server = fixtureServer();
+    const raw = server.callToolResult.bind(server);
+    server.callToolResult = async (...args) => { if (args[0] === "browser_click") browserActions++; return raw(...args); };
+    const model = {
+        async getResponse() {
+            await service.command("pause", { runId: service.state.runId });
+            return call("browser_click", { tabId: 12, ref: "fixture:e1" }, 1);
+        }, async *getStreamedResponse() {}
+    };
+    service = new AgentService({ env: { OPENAI_API_KEY: "fixture-key", AGENT_MODEL: "fixture" },
+        configure: async () => ({ model, modelSettings: {}, close: async () => {} }),
+        run: (prompt, options) => runBrowserAgent(prompt, { ...options, server }) });
+    const paused = new Promise(resolve => {
+        const unsubscribe = service.subscribe(state => { if (state.status === "paused") { unsubscribe(); resolve(); } });
+    });
+    await service.command("start", { prompt: "Click", tabId: 12, mode: "browser" });
+    await paused;
+    await service.command("stop", { runId: service.state.runId });
+    await service.running;
+    assert.equal(service.state.status, "stopped");
+    assert.equal(browserActions, 0);
+    assert.equal(service.history.length, 0);
 });

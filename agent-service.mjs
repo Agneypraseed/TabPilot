@@ -22,6 +22,7 @@ export class AgentService {
         this.runAgent = run;
         this.configureModel = configure;
         this.listeners = new Set();
+        this.sessionId = randomUUID();
         this.revision = 0;
         this.history = [];
         this.conversationTab = null;
@@ -29,7 +30,7 @@ export class AgentService {
     }
     get active() { return ["running", "pausing", "paused", "stopping"].includes(this.state.status); }
     snapshot() {
-        return { ...this.state, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
+        return { ...this.state, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
     }
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
     emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }

@@ -289,7 +289,7 @@
     }
   }
   function receive(state) {
-    if (agent && state.revision < agent.revision) return;
+    if (agent && state.sessionId === agent.sessionId && state.revision < agent.revision) return;
     agent = state;
     if (active()) mode = state.mode;
     fillSettings();
