@@ -20,7 +20,7 @@ async function readCommand(request) {
     return parseBrowserCommand(JSON.parse(text));
 }
 
-export function createBridge({ token, timeoutMs = 10000 }) {
+export function createBridge({ token, timeoutMs = 20000 }) {
     if (!token) throw new Error("A pairing token is required.");
     let extension = null;
     const pending = new Map();

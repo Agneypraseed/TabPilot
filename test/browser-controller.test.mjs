@@ -9,7 +9,10 @@ export function controllerFixture() {
     const chrome = {
         storage: { session: { get: async key => ({ [key]: stored[key] }), set: async value => Object.assign(stored, value),
             remove: async key => { delete stored[key]; } } },
-        tabs: { get: async id => ({ id, url: "https://example.com/" }) },
+        tabs: { get: async id => ({ id, url: "https://example.com/", windowId: 1 }),
+            create: async options => ({ id: 34, ...options }), remove: async id => calls.push({ method: "remove", id }),
+            update: async (id, options) => calls.push({ method: "update", id, options }) },
+        windows: { update: async () => {} },
         debugger: {
             onDetach: { addListener(fn) { handlers.detach = fn; } },
             onEvent: { addListener(fn) { handlers.event = fn; } },
@@ -18,6 +21,10 @@ export function controllerFixture() {
             sendCommand: async (target, method, params) => {
                 calls.push({ target, method, params });
                 if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "root" } } };
+                if (method === "Page.getNavigationHistory") return { currentIndex: 1, entries: [
+                    { id: 1, url: "https://example.com/first" }, { id: 2, url: "https://example.com/" }, { id: 3, url: "https://example.com/next" }
+                ] };
+                if (method === "Runtime.evaluate" && params.expression.includes(')("status",')) return { result: { value: { ready: true, matches: true } } };
                 if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
                 if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1000, clientHeight: 800 } };
                 if (method === "Runtime.evaluate" && params.expression.includes(')("resolve",')) return { result: { value: {
@@ -79,4 +86,23 @@ test("detach revokes permission and navigation invalidates old references", asyn
     handlers.detach({ tabId: 12 });
     assert.equal(stored["tab:12"], undefined);
     await assert.rejects(browser.snapshot(12), /Access disabled/);
+});
+
+test("navigation/history stay within web pages and newly created tabs start disabled", async () => {
+    const { browser, stored, calls } = controllerFixture();
+    await browser.setAccess(12, true);
+    await assert.rejects(browser.action(12, "navigate", { url: "javascript:alert(1)" }), /cannot be controlled/);
+    await browser.action(12, "navigate", { url: "https://example.com/next" });
+    assert.ok(calls.some(call => call.method === "Page.navigate" && call.params.url === "https://example.com/next"));
+    await browser.action(12, "back");
+    await browser.action(12, "forward");
+    assert.deepEqual(calls.filter(call => call.method === "Page.navigateToHistoryEntry").map(call => call.params.entryId), [1, 3]);
+    const created = await browser.action(12, "open", { url: "https://example.com/new" });
+    assert.equal(created.tabId, 34);
+    assert.equal(created.enabled, false);
+    assert.equal(stored["tab:34"], undefined);
+    await assert.rejects(browser.snapshot(34), /Access disabled/);
+    await browser.action(12, "close");
+    assert.equal(stored["tab:12"], undefined);
+    assert.ok(calls.some(call => call.method === "remove" && call.id === 12));
 });

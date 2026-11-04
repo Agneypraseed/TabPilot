@@ -1,5 +1,7 @@
 // Serialized into Chrome's isolated world. Keep every helper inside this function.
 function tabPilotPage(operation = "snapshot", args = {}) {
+    if (operation === "status") return { ready: ["interactive", "complete"].includes(document.readyState),
+        matches: !args.text || (document.body?.innerText || "").includes(args.text) };
     const stateKey = "__tabPilotPageV1";
     const role = el => el.getAttribute("role") || ({ BUTTON: "button", A: "link", SELECT: "combobox",
         TEXTAREA: "textbox", SUMMARY: "button" }[el.tagName]) || (el.tagName === "INPUT"

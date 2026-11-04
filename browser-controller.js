@@ -162,11 +162,84 @@ class TabPilotBrowser {
         await this.command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
     }
 
+    httpUrl(value) {
+        let url;
+        try { url = new URL(value); } catch { throw new Error("Provide an absolute HTTP or HTTPS URL."); }
+        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hostname === "chromewebstore.google.com" ||
+            (url.hostname === "chrome.google.com" && url.pathname.startsWith("/webstore"))) throw new Error("This URL cannot be controlled.");
+        return url.href;
+    }
+
+    async waitDocument(tabId, { text, timeoutMs = 8000, loaderId } = {}) {
+        if (!Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 10000 || (text !== undefined && typeof text !== "string")) throw new Error("Invalid wait condition.");
+        const end = Date.now() + timeoutMs;
+        while (Date.now() < end) {
+            await this.permitted(tabId);
+            if (this.dialogs.has(tabId)) return;
+            try {
+                const { frameTree } = await this.command(tabId, "Page.getFrameTree");
+                if (!loaderId || frameTree.frame.loaderId === loaderId) {
+                    const status = await this.evaluate(tabId, "status", { text });
+                    if (status?.ready && status.matches) return;
+                }
+            } catch (error) {
+                if (/Access disabled|No tab|Invalid tab|protected/i.test(error.message)) throw error;
+                // A navigation can destroy the isolated world while it is being read.
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        throw new Error("Wait timed out; take a fresh snapshot to inspect the current page.");
+    }
+
     action(tabId, method, params = {}) {
         return this.serial(tabId, async () => {
-            if (this.dialogs.has(tabId)) throw new Error("A JavaScript dialog is open. Use browser_dialog first.");
+            if (this.dialogs.has(tabId) && method !== "dialog") throw new Error("A JavaScript dialog is open. Use browser_dialog first.");
             let result = {};
-            if (["click", "hover", "fill", "select"].includes(method)) {
+            if (method === "navigate") {
+                const navigation = await this.command(tabId, "Page.navigate", { url: this.httpUrl(params.url) });
+                if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
+                this.invalidate(tabId);
+                await this.waitDocument(tabId, { loaderId: navigation.loaderId });
+            } else if (["back", "forward"].includes(method)) {
+                const history = await this.command(tabId, "Page.getNavigationHistory");
+                const entry = history.entries[history.currentIndex + (method === "back" ? -1 : 1)];
+                if (!entry) throw new Error(`No ${method} history entry.`);
+                this.httpUrl(entry.url);
+                await this.command(tabId, "Page.navigateToHistoryEntry", { entryId: entry.id });
+                this.invalidate(tabId);
+                await new Promise(resolve => setTimeout(resolve, 150));
+                await this.waitDocument(tabId);
+            } else if (method === "reload") {
+                await this.command(tabId, "Page.reload");
+                this.invalidate(tabId);
+                await new Promise(resolve => setTimeout(resolve, 150));
+                await this.waitDocument(tabId);
+            } else if (method === "wait") {
+                await this.waitDocument(tabId, params);
+            } else if (method === "open") {
+                const url = this.httpUrl(params.url);
+                await this.permitted(tabId);
+                const created = await this.chrome.tabs.create({ url, active: params.active === true });
+                // All newly opened tabs start disabled, including agent-created tabs.
+                await this.chrome.storage.session.remove(`tab:${created.id}`);
+                return { action: method, tabId: created.id, url, enabled: false,
+                    message: "New tab opened disabled. The user must explicitly enable it before the agent can access it." };
+            } else if (method === "close") {
+                await this.permitted(tabId);
+                await this.chrome.storage.session.remove(`tab:${tabId}`);
+                await this.detach(tabId);
+                await this.chrome.tabs.remove(tabId);
+                return { action: method, tabId, closed: true };
+            } else if (method === "focus") {
+                const tab = await this.permitted(tabId);
+                await this.chrome.tabs.update(tabId, { active: true });
+                await this.chrome.windows.update(tab.windowId, { focused: true });
+            } else if (method === "dialog") {
+                if (!this.dialogs.has(tabId)) throw new Error("No JavaScript dialog is open.");
+                if (typeof params.accept !== "boolean" || (params.promptText !== undefined && typeof params.promptText !== "string")) throw new Error("Specify accept true/false and optional promptText.");
+                await this.command(tabId, "Page.handleJavaScriptDialog", params);
+                this.dialogs.delete(tabId);
+            } else if (["click", "hover", "fill", "select"].includes(method)) {
                 const target = await this.resolve(tabId, params.ref);
                 const x = target.x + target.width / 2, y = target.y + target.height / 2;
                 if (method === "click") await this.clickPoint(tabId, x, y, params.button, params.clickCount);

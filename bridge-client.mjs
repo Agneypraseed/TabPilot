@@ -29,7 +29,7 @@ export async function requestBridge(command, tabId, params = {}) {
             method: "POST",
             headers: { Authorization: `Bearer ${config.token}`, ...(action ? { "Content-Type": "application/json" } : {}) },
             ...(action ? { body: JSON.stringify(action) } : {}),
-            signal: AbortSignal.timeout(12000),
+            signal: AbortSignal.timeout(25000),
             redirect: "error"
         });
     } catch {
