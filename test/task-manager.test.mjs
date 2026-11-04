@@ -5,6 +5,25 @@ import { RunContext } from "@openai/agents";
 import { TaskManager } from "../task-manager.mjs";
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test("repeat schedules only after successful completion and canceling the next occurrence prevents execution", async () => {
+    let calls = 0;
+    const ui = setup(async (_prompt, options) => { calls++; return complete(options); });
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create({ repeatEveryMs: 60000 });
+    await until(() => !ui.manager.active && ui.records.size === 2);
+    const first = [...ui.records.values()].find(record => record.status === "completed");
+    const next = [...ui.records.values()].find(record => record.status === "scheduled");
+    assert.equal(next.seriesId, first.id);
+    assert.equal(next.notBefore, 61000);
+    await ui.manager.tick();
+    assert.equal(calls, 1);
+    await ui.manager.command("task-cancel", { taskId: next.id, scope: ui.scope });
+    ui.advance(60000);
+    await ui.manager.tick();
+    assert.equal(calls, 1);
+    assert.equal(ui.records.get(next.id).status, "cancelled");
+    await ui.manager.close();
+});
 test("stopping coordinator during child persistence cannot launch the new specialist", async () => {
     let release, blocked = false, childCalls = 0;
     const barrier = new Promise(resolve => { release = resolve; });
