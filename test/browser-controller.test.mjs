@@ -80,29 +80,27 @@ test("click, fill, key, and scroll use CDP input and return observed state", asy
     await assert.rejects(browser.action(12, "click", { ref: "old:e1" }), /STALE_REF/);
 });
 
-test("agent pointer animates through compositor overlays without injecting page DOM and hides for screenshots", async () => {
+test("pointer motion uses one page-local animation and hides before screenshots", async () => {
     const { browser, calls } = controllerFixture();
     await browser.setAccess(12, true);
     await browser.snapshot(12);
     await browser.action(12, "click", { ref: "snapshot-1:e1" });
-    assert.equal(calls.filter(c => c.method === "Overlay.enable").length, 1);
-    const frames = calls.filter(c => c.method === "Overlay.highlightQuad");
-    assert.equal(frames.length, 12);
-    assert.equal(frames.at(-1).params.quad[0], 60);
-    assert.equal(frames.at(-1).params.quad[1], 35);
-    assert.ok(calls.some(c => c.method === "Overlay.highlightRect"));
+    const pointer = calls.filter(c => c.method === "Runtime.evaluate" && c.params.expression.includes(')("pointer",'));
+    assert.equal(pointer.length, 2, "one move and one click, without a protocol call per animation frame");
+    assert.ok(pointer[0].params.expression.includes('"x":60,"y":35'));
+    assert.equal(calls.some(c => c.method.startsWith("Overlay.")), false);
     await browser.screenshot(12);
     const capture = calls.findIndex(c => c.method === "Page.captureScreenshot");
-    assert.ok(calls.slice(0, capture).some(c => c.method === "Overlay.hideHighlight"));
+    assert.ok(calls.slice(0, capture).some(c => c.params?.expression?.includes('"visible":false')));
     await browser.setAccess(12, false);
     assert.equal(browser.visuals.has(12), false);
 });
 
-test("unsupported compositor overlays do not prevent normal input", async () => {
+test("unavailable pointer rendering does not prevent normal input", async () => {
     const { browser, chrome, calls } = controllerFixture();
     const send = chrome.debugger.sendCommand;
     chrome.debugger.sendCommand = async (...args) => {
-        if (args[1] === "Overlay.enable") throw new Error("Unsupported domain");
+        if (args[1] === "Runtime.evaluate" && args[2].expression.includes(')("pointer",')) throw new Error("Visual unavailable");
         return send(...args);
     };
     await browser.setAccess(12, true);

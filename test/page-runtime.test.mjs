@@ -14,7 +14,7 @@ export function page(html) {
     window.Element.prototype.scrollIntoView = () => {};
     const context = vm.createContext({ document, window, location: { href: "https://example.com/" },
         crypto: globalThis.crypto, innerWidth: 1000, innerHeight: 800, scrollX: 0, scrollY: 0, devicePixelRatio: 1,
-        Event: window.Event, Map });
+        Event: window.Event, Map, setTimeout, clearTimeout, MutationObserver: window.MutationObserver });
     vm.runInContext(source, context);
     return { document, run: (operation, args = {}) => context.tabPilotPage(operation, args) };
 }
@@ -59,4 +59,25 @@ test("typing status follows the original editable target and detects focus, visi
     input.hidden = false;
     input.setAttribute("aria-label", "Different purpose");
     assert.equal(fixture.run("typing-status", { ref }).focused, false);
+});
+
+test("closed-shadow cursor stays out of observations and does not stale screenshots, while real page changes still do", async () => {
+    const fixture = page('<button>Save</button>');
+    const initial = fixture.run("snapshot");
+    const before = fixture.run("fingerprint");
+    fixture.run("pointer", { x: 100, y: 80 });
+    await new Promise(resolve => setImmediate(resolve));
+    const host = fixture.document.querySelector("tabpilot-pointer");
+    assert.ok(host);
+    assert.equal(host.shadowRoot, null);
+    assert.equal(fixture.run("fingerprint").revision, before.revision);
+    assert.equal(fixture.run("snapshot").elements.length, initial.elements.length);
+    fixture.document.querySelector("button").textContent = "Changed";
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(fixture.run("fingerprint").revision > before.revision);
+    const revision = fixture.run("fingerprint").revision;
+    fixture.run("pointer", { visible: false });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fixture.run("fingerprint").revision, revision);
+    assert.equal(host.isConnected, false);
 });

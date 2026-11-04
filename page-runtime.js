@@ -1,10 +1,56 @@
 // Serialized into Chrome's isolated world. Keep every helper inside this function.
 function tabPilotPage(operation = "snapshot", args = {}) {
+    const decorationsKey = "__tabPilotDecorationsV1";
+    const decorations = globalThis[decorationsKey] ??= new WeakSet();
+    if (operation === "pointer") {
+        const key = "__tabPilotPointerV2";
+        let pointer = globalThis[key];
+        if (args.visible === false) {
+            if (pointer) { clearTimeout(pointer.timer); pointer.host.remove(); }
+            return { visible: false };
+        }
+        if (![args.x, args.y].every(Number.isFinite)) throw new Error("Invalid pointer coordinates.");
+        const reduced = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        if (!pointer?.host.isConnected) {
+            const from = pointer?.x !== undefined ? { x: pointer.x - 3, y: pointer.y - 2 } : { x: args.x - 25, y: args.y - 15 };
+            const host = document.createElement("tabpilot-pointer");
+            decorations.add(host);
+            host.setAttribute("aria-hidden", "true");
+            host.style.cssText = "all:initial!important;position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;pointer-events:none!important;z-index:2147483647!important";
+            const shadow = host.attachShadow({ mode: "closed" });
+            shadow.innerHTML = `<style>
+                .cursor{position:fixed;left:0;top:0;width:28px;height:32px;pointer-events:none;will-change:transform;transition:transform 240ms cubic-bezier(.2,.8,.2,1);filter:drop-shadow(0 1px 2px #0003)}
+                svg{display:block;width:28px;height:32px;overflow:visible}
+                .ripple{position:absolute;left:-11px;top:-12px;width:24px;height:24px;border:2px solid #5575ef;border-radius:50%;box-sizing:border-box;opacity:0;pointer-events:none}
+                @media(prefers-reduced-motion:reduce){.cursor{transition:none}}
+            </style><div class="cursor"><span class="ripple"></span><svg viewBox="0 0 28 32" aria-hidden="true"><path d="M3 2V24L9 18L13 27L17 25L13 16H22Z" fill="#202735" stroke="white" stroke-width="1.7" stroke-linejoin="round"/></svg></div>`;
+            const mark = node => { decorations.add(node); for (const child of node.childNodes) mark(child); };
+            mark(shadow);
+            pointer = { host, cursor: shadow.querySelector(".cursor"), ripple: shadow.querySelector(".ripple") };
+            globalThis[key] = pointer;
+            pointer.cursor.style.transform = `translate3d(${from.x}px,${from.y}px,0)`;
+            document.documentElement.append(host);
+            pointer.cursor.getBoundingClientRect();
+        }
+        clearTimeout(pointer.timer);
+        pointer.cursor.style.transform = `translate3d(${args.x - 3}px,${args.y - 2}px,0)`;
+        pointer.x = args.x; pointer.y = args.y;
+        if (args.pressed) pointer.ripple.animate?.([
+            { opacity: 0.65, transform: "scale(.65)" }, { opacity: 0, transform: "scale(1.8)" }
+        ], { duration: reduced ? 100 : 360, easing: "ease-out" });
+        pointer.timer = setTimeout(() => pointer.host.remove(), 1200);
+        return { visible: true, reducedMotion: reduced };
+    }
     if (operation === "fingerprint") {
-        const key = "__tabPilotVisualV1";
+        const key = "__tabPilotVisualV2";
         if (!globalThis[key] || globalThis[key].document !== document) {
             const visual = { document, id: crypto.randomUUID(), revision: 0 };
-            new MutationObserver(() => { visual.revision++; }).observe(document, { subtree: true, attributes: true, childList: true, characterData: true });
+            new MutationObserver(records => {
+                const own = record => decorations.has(record.target) ||
+                    (record.type === "childList" && [...record.addedNodes, ...record.removedNodes].length > 0 &&
+                        [...record.addedNodes, ...record.removedNodes].every(node => decorations.has(node)));
+                if (records.some(record => !own(record))) visual.revision++;
+            }).observe(document, { subtree: true, attributes: true, childList: true, characterData: true });
             globalThis[key] = visual;
         }
         return { id: globalThis[key].id, revision: globalThis[key].revision };

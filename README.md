@@ -51,7 +51,7 @@ The bridge serves one connected extension at a time and rejects overlapping work
 
 The toolbar popup offers quick access to the agent UI. Open a persistent workspace before longer tasks so you can watch, pause, and steer while interacting with pages. In Chrome with side-panel support, the extension's context menu also offers **Open side panel**. Embedded browsers may support only the popup and workspace tab.
 
-Input actions show a blue agent pointer, eased movement, and a click flash on browsers supporting Chrome's compositor overlays. These cues do not intercept input or modify the website DOM. They hide before agent screenshots and fade after inactivity. If a host omits overlay support, browser actions continue without the pointer. **Settings → Open Chrome side panel** also opens the persistent side view in desktop Chrome. Codex's embedded browser currently lacks that native side-panel support.
+Input actions show a clean arrow with smooth local animation and a small circular click ripple. The pointer lives in a noninteractive closed shadow root, stays out of page observations and screenshot-change detection, and hides before agent screenshots. It removes itself after inactivity. If visual rendering fails, browser actions continue without it. **Settings → Open Chrome side panel** opens the persistent side view in desktop Chrome. Codex's embedded browser currently lacks that native side-panel support.
 
 Text entry is paced: short values appear character by character, while longer values use at most 24 chunks to keep tasks responsive. Typing stops if the original target loses focus or becomes unavailable, so input is not redirected into another field.
 
