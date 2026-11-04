@@ -1,0 +1,43 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { randomUUID } from "node:crypto";
+import { WebSocket } from "ws";
+import { createBridge } from "../server.mjs";
+import { TaskManager } from "../task-manager.mjs";
+
+test("task API shares the real scheduler, binds the paired browser scope and rejects web origins", async t => {
+    const token = "c".repeat(64), scope = randomUUID(), profileId = randomUUID();
+    const manager = new TaskManager({ autoTick: false, browser: async () => [{ id: 12 }],
+        store: { load: async () => [], upsert: async record => structuredClone(record) } });
+    const bridge = createBridge({ token, agentService: manager });
+    await new Promise(resolve => bridge.server.listen(0, "127.0.0.1", resolve));
+    t.after(() => bridge.close());
+    const url = `http://127.0.0.1:${bridge.server.address().port}`;
+    const request = (body, headers = {}) => fetch(url + "/tasks", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    assert.equal((await request({ method: "task-list", payload: {} })).status, 503);
+    const socket = new WebSocket(url.replace("http:", "ws:") + "/extension", { origin: `chrome-extension://${"c".repeat(32)}` });
+    await once(socket, "open");
+    const ready = once(socket, "message");
+    socket.send(JSON.stringify({ type: "authenticate", token, historyScope: scope, profileId }));
+    await ready;
+    const input = { method: "task-create", payload: { tabId: 12, prompt: "Read title", mode: "browser", notBefore: Date.now() + 60000 } };
+    assert.equal((await request(input, { Authorization: "Bearer wrong" })).status, 401);
+    assert.equal((await request(input, { Origin: "https://example.com" })).status, 403);
+    assert.equal((await request({ ...input, payload: { ...input.payload, scope: randomUUID() } })).status, 400);
+    await manager.command("select-tab", { tabId: 34, scope });
+    const created = await (await request(input)).json();
+    assert.equal(created.ok, true);
+    assert.equal(created.data.tasks.length, 1);
+    const task = created.data.tasks[0];
+    assert.equal(task.status, "scheduled");
+    assert.equal(task.scope, scope);
+    assert.equal(task.profileId, profileId);
+    assert.equal(manager.selectedTab, 34, "external scheduling does not steal the UI selection");
+    const filtered = await (await request({ method: "task-list", payload: { tabId: 34 } })).json();
+    assert.deepEqual(filtered.data.tasks, []);
+    const cancelled = await (await request({ method: "task-cancel", payload: { taskId: task.id } })).json();
+    assert.equal(cancelled.data.tasks[0].status, "cancelled");
+    assert.equal((await request({ method: "human-response", payload: {} })).status, 400, "task API cannot answer user approvals");
+    assert.equal((await request({ method: "approved-research", payload: {} })).status, 400);
+});

@@ -134,6 +134,9 @@
     browser_download: "Starting a download",
     browser_download_status: "Checking download progress",
     browser_download_cancel: "Canceling a download",
+    browser_download_local: "Saving a public file locally",
+    browser_download_local_status: "Checking local download progress",
+    browser_download_local_cancel: "Canceling a local download",
     browser_tabs: "Finding your tab",
     browser_snapshot: "Reading the page",
     browser_click: "Clicking an element",
@@ -387,6 +390,7 @@
     $("max-turns").value = s.maxTurns;
     $("approval-mode").value = s.approvalMode || "important";
     $("sound-alerts").checked = s.soundAlerts !== false;
+    $("download-directory").value = s.downloadDirectory || "";
     if (
       ![...$("timeout").options].some(
         (option) => Number(option.value) === s.timeoutMs,
@@ -766,6 +770,7 @@
         timeoutMs: Number($("timeout").value),
         approvalMode: $("approval-mode").value,
         soundAlerts: $("sound-alerts").checked,
+        ...($("download-directory").value.trim() ? { downloadDirectory: $("download-directory").value.trim() } : {}),
       });
       settingsDirty = false;
       fillSettings();

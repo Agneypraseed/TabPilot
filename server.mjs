@@ -7,15 +7,22 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { parseBrowserCommand } from "./commands.mjs";
-import { AgentService } from "./agent-service.mjs";
 import { TraceHistory } from "./trace-history.mjs";
 import { TaskManager } from "./task-manager.mjs";
 import { TaskStore } from "./task-store.mjs";
 import { requestBridge } from "./bridge-client.mjs";
+import { taskCommandSchema } from "./task-commands.mjs";
+import { LocalDownloads } from "./local-downloads.mjs";
 
 const historyId = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
-async function readCommand(request) {
+export function requireObservedDownload(snapshot, url) {
+    const target = new URL(url).href;
+    if (snapshot.url !== target && !snapshot.elements?.some(element => element.href === target))
+        throw new Error("Use a public file link observed on the enabled page. Read the page again to find its URL.");
+}
+
+async function readJson(request) {
     const text = await new Promise((resolve, reject) => {
         let chunks = [], bytes = 0, rejected = false;
         request.on("data", chunk => {
@@ -26,10 +33,10 @@ async function readCommand(request) {
         request.on("end", () => { if (!rejected) resolve(Buffer.concat(chunks).toString("utf8")); });
         request.on("error", reject);
     });
-    return parseBrowserCommand(JSON.parse(text));
+    return JSON.parse(text);
 }
 
-export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
+export function createBridge({ token, timeoutMs = 20000, agentService, localDownloads, validateLocalDownload = async () => {} } = {}) {
     if (!token) throw new Error("A pairing token is required.");
     let extension = null;
     let extensionScope = randomUUID();
@@ -73,9 +80,21 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
         if (request.method !== "POST") {
             return reply(response, 405, { ok: false, error: "Use POST." });
         }
+        if (request.url === "/tasks") {
+            if (extension?.readyState !== WebSocket.OPEN) return reply(response, 503, { ok: false, error: "Connect TabPilot before managing tasks." });
+            if (!agentService?.connected) return reply(response, 503, { ok: false, error: "Restart the bridge to enable scheduled tasks." });
+            let task;
+            try { task = taskCommandSchema.parse(await readJson(request)); }
+            catch { return reply(response, 400, { ok: false, error: "Invalid task command (maximum 64 KB)." }); }
+            try {
+                const state = await agentService.command(task.method, { ...task.payload, scope: extensionScope });
+                const data = task.method === "task-list" ? state : { tasks: state.jobs };
+                return reply(response, 200, { ok: true, data });
+            } catch (error) { return reply(response, 409, { ok: false, error: error.message }); }
+        }
         let command;
         if (request.url === "/command") {
-            try { command = await readCommand(request); }
+            try { command = parseBrowserCommand(await readJson(request)); }
             catch { return reply(response, 400, { ok: false, error: "Invalid browser command or arguments (maximum 64 KB)." }); }
         }
         if (request.url === "/tabs") command = { method: "tabs" };
@@ -112,6 +131,21 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
         if (extension !== targetExtension || extension?.readyState !== WebSocket.OPEN || response.destroyed || pending.size >= 16) {
             void finishTrace(entry, false, { error: "Browser connection changed or request cancelled before dispatch." }).catch(historyFailure);
             if (!response.destroyed) reply(response, 503, { ok: false, error: "Browser connection changed. Reconnect and try again." });
+            return;
+        }
+        if (["download-local", "download-local-status", "download-local-cancel"].includes(command.method)) {
+            try {
+                if (!localDownloads) throw new Error("Restart the bridge to enable local downloads.");
+                const context = { scope: extensionScope, tabId: command.tabId, ...command.params };
+                if (command.method === "download-local") await validateLocalDownload(context);
+                const operation = { "download-local": "start", "download-local-status": "status", "download-local-cancel": "cancel" }[command.method];
+                const data = await localDownloads[operation](context);
+                await finishTrace(entry, true, data).catch(historyFailure);
+                if (!response.destroyed) reply(response, 200, { ok: true, data });
+            } catch (error) {
+                await finishTrace(entry, false, { error: error.message }).catch(historyFailure);
+                if (!response.destroyed) reply(response, 409, { ok: false, error: error.message });
+            }
             return;
         }
         const timer = setTimeout(() => {
@@ -230,6 +264,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
             unsubscribeHistory?.();
             agentService?.disconnect();
             await agentService?.close?.();
+            await localDownloads?.close?.();
             clearInterval(heartbeat);
             for (const client of sockets) client.terminate();
             await new Promise((done) => server.close(done));
@@ -251,7 +286,22 @@ async function main() {
         browser: requestBridge, serviceOptions: { settings, traceStore, saveSettings: async next => {
         await writeFile(settingsFile, JSON.stringify(next, null, 2), { mode: 0o600 });
     } } });
-    const bridge = createBridge({ token, agentService });
+    const localDownloads = new LocalDownloads({
+        directory: () => agentService.preferences.settings.downloadDirectory,
+        metadataFile: fileURLToPath(new URL(".tabpilot/local-downloads.json", import.meta.url)),
+        timeoutMs: 120000,
+        permitted: async ({ scope, tabId }) => {
+            if (agentService.connection?.scope !== scope) throw new Error("Reconnect the originating browser before accessing this download.");
+            const tabs = await requestBridge("tabs");
+            if (!tabs.some(tab => tab.id === tabId)) throw new Error("Access disabled for this tab.");
+            return true;
+        }
+    });
+    await Promise.all([agentService.ready, localDownloads.ready]);
+    const bridge = createBridge({ token, agentService, localDownloads, validateLocalDownload: async ({ tabId, url }) => {
+        const snapshot = await requestBridge("snapshot", tabId);
+        requireObservedDownload(snapshot, url);
+    } });
     agentService.approveResearchTab = input => bridge.approveResearchTab(input);
     await new Promise((done, reject) => {
         bridge.server.once("error", reject);

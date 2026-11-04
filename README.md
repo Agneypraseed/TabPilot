@@ -72,7 +72,15 @@ Open **Tasks** for the selected tab to see its queue, schedules, coordinator, an
 
 Expand **Schedule a task**, enter the instruction, choose a start time and optional repeat interval, then schedule it. A blank start time means now. Repeats are scheduled after successful completion, so unfinished tasks do not overlap with another occurrence. Disabled tabs wait for access; keep Chrome and the local bridge running. Tasks due while the bridge is off become eligible when it reconnects, without replaying missed repeat intervals.
 
-An agent records completion only after reporting observed evidence. Turn limits save progress and continue in another stage. The stage limit bounds total continuation; exhausted tasks wait for review instead of being marked complete. **Review and resume** starts with a fresh page check. After a browser restart, **Use selected tab** explicitly rebinds unfinished work to the tab you choose. Interrupted actions are not automatically replayed. Schedules and progress stay local under ignored `.tabpilot/tasks.json`.
+An agent records completion only after reporting observed evidence. Turn limits save progress and continue in another stage. The stage limit bounds total continuation; exhausted tasks wait for review instead of being marked complete. **Review and resume** starts with a fresh page check. After a browser restart, **Use selected tab** explicitly rebinds unfinished work to the tab you choose. Interrupted actions are not automatically replayed. Schedules and progress stay local under ignored `.tabpilot/tasks.json`. You can also queue and inspect the same tasks through CLI:
+
+```powershell
+npm run cli -- task-schedule 123 "Read this page and report its title" 60
+npm run cli -- task-list 123
+npm run cli -- task-cancel TASK_UUID
+```
+
+The optional delay is in seconds. Scheduled tasks use the workspace model settings and can incur provider API usage; they remain visible in Tasks. External task controls cannot answer approval cards.
 
 With research enabled, the coordinator can open a separate tab and request approval for a research specialist to access that exact page. New tabs remain disabled until you approve. Chrome opens research tabs in the background; hosts that require foreground tabs bring the new page into view. Specialists work independently in their assigned tabs; the coordinator waits for their actual findings before combining them. Waiting for a specialist spends no model tokens. **Stop** on a coordinator also stops its unfinished specialists; it cannot undo dispatched actions or close their tabs. Pause affects the selected agent. Research workers share the configured model and retain their own History.
 
@@ -87,6 +95,14 @@ npm run cli -- download 123 https://example.com/report.pdf research/report.pdf
 npm run cli -- download 123 https://example.com/report.pdf --save-as
 npm run cli -- download-status 123 42
 npm run cli -- download-cancel 123 42
+```
+
+In embedded browsers where Chrome's native chooser is unavailable, explicitly choose **local-bridge download** for a public file link. Set its absolute folder in **Settings > Local downloads** before starting the task. The default is this project's `.tabpilot/downloads` folder. It sends no browser cookies or sign-in credentials; authenticated downloads still need Chrome. Local transfers are limited to 25 MiB and two minutes, preserve existing files, and support progress/cancellation. The URL must be the current enabled page or a link observed on that page. A canceled native request never switches to this method automatically.
+
+```powershell
+npm run cli -- download-local 123 https://example.com/report.pdf research/report.pdf
+npm run cli -- download-local-status 123 JOB_UUID
+npm run cli -- download-local-cancel 123 JOB_UUID
 ```
 
 Use the actual ID returned by the download command. Status and cancellation require access to the originating tab and a download created through TabPilot. A started transfer is not proof of completion; a tracking warning includes its ID so you can inspect it without starting another transfer. Workspace approval cards apply to the included workspace agent. External CLI/MCP clients control their own approval workflow.
@@ -136,7 +152,7 @@ Replace the path with your checkout location. The client launches the MCP proces
 - `browser_open` creates a disabled tab; `browser_close` closes an enabled tab.
 - `browser_screenshot` returns an actual image plus metadata. `browser_pointer` clicks, hovers, or drags using that image's `screenshotId` and pixel coordinates.
 - `browser_dialog` handles a native JavaScript dialog when the browser exposes one.
-- `browser_download`, `browser_download_status`, and `browser_download_cancel` start, inspect, or cancel a download belonging to an enabled tab.
+- `browser_download`, `browser_download_status`, and `browser_download_cancel` use Chrome downloads. `browser_download_local`, `browser_download_local_status`, and `browser_download_local_cancel` explicitly save public page links through the local bridge into the configured folder.
 
 Website content is untrusted data. An agent should not treat instructions found in page text as instructions from the user.
 
@@ -187,3 +203,5 @@ Screenshots capture tab content, not browser chrome or operating-system dialogs.
 
 For architecture and the feature-by-feature commit map, see [the learning guide](docs/learning-map.md).
 
+
+For the scheduled-task and public local-download acceptance check, keep the paired practice tab enabled and run `node verification/live-workspace.mjs`. It schedules one real task one minute ahead, checks that no stage starts early, verifies completion and its archived tool result, and compares saved report bytes with the practice source. This uses the workspace model and can incur API usage; it writes a local verification report under `.tabpilot/verification/`.

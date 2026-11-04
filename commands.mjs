@@ -16,6 +16,9 @@ export const actionParameters = {
     download: z.object({ url: downloadUrl, filename: downloadFilename.optional(), saveAs: z.boolean().optional() }).strict(),
     "download-status": z.object({ downloadId }).strict(),
     "download-cancel": z.object({ downloadId }).strict(),
+    "download-local": z.object({ url: downloadUrl, filename: downloadFilename.optional() }).strict(),
+    "download-local-status": z.object({ downloadId: z.string().uuid() }).strict(),
+    "download-local-cancel": z.object({ downloadId: z.string().uuid() }).strict(),
     click: z.object({ ref, button: z.enum(["left", "right", "middle"]).optional(), clickCount: z.number().int().min(1).max(2).optional() }).strict(),
     hover: z.object({ ref }).strict(),
     fill: z.object({ ref, text: z.string().max(20000) }).strict(),
@@ -42,6 +45,9 @@ export const commandSchema = z.discriminatedUnion("method", Object.entries(actio
 export const parseBrowserCommand = value => commandSchema.parse(value);
 
 export const commandDescriptions = {
+    "download-local": "Explicitly download a PUBLIC page link through the local bridge into the user's configured local folder. No browser cookies or credentials are forwarded. Requires enabled originating tab; never use this automatically after a canceled native download. Returns a job ID; use browser_download_local_status to verify completion.",
+    "download-local-status": "Read progress and final path for a bridge-local download belonging to this enabled tab. A started job does not prove completion.",
+    "download-local-cancel": "Cancel a bridge-local download belonging to this enabled tab. Completed files are not deleted.",
     download: "Start an HTTP(S) file download from an enabled tab. filename is a relative path under Chrome Downloads; saveAs opens Chrome's native destination chooser. Existing files are uniquified. A returned ID means started, not complete: check browser_download_status. Never repeat a start just because status is unavailable; Chrome retains danger prompts.",
     "download-status": "Inspect only a download started for this enabled tab. Returns Chrome state, final filename and danger/error details when available. Only state=complete verifies completion.",
     "download-cancel": "Cancel only a download started for this enabled tab, then inspect its current state.",

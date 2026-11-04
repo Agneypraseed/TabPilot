@@ -4,12 +4,15 @@ import { runBrowserAgent } from "./agent.mjs";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
 import { historyQuery } from "./trace-history.mjs";
 import { HumanRequests, ActiveRunBudget } from "./human-requests.mjs";
+import { isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const providers = { openai: "OPENAI_API_KEY", meta: "META_API_KEY", gemini: "GOOGLE_GENERATIVE_AI_API_KEY", claude: "ANTHROPIC_API_KEY", "openai-compatible": "COMPATIBLE_API_KEY" };
 const settingsSchema = z.object({
     provider: z.enum(Object.keys(providers)), model: z.string().trim().min(1).max(150),
     maxTurns: z.number().int().min(1).max(100), timeoutMs: z.number().int().min(1000).max(900000),
-    approvalMode: z.enum(["important", "every-action"]).default("important"), soundAlerts: z.boolean().default(true)
+    approvalMode: z.enum(["important", "every-action"]).default("important"), soundAlerts: z.boolean().default(true),
+    downloadDirectory: z.string().trim().min(1).max(1000).refine(value => isAbsolute(value) && !/[\u0000-\u001f\u007f-\u009f]/.test(value), "Choose an absolute local download folder.").default(fileURLToPath(new URL("./.tabpilot/downloads/", import.meta.url)))
 }).strict();
 const startSchema = z.object({ prompt: z.string().trim().min(1).max(12000),
     tabId: z.number().int().nonnegative(), mode: z.enum(["browser", "computer"]), scope: z.string().uuid().optional(), tabTitle: z.string().max(500).optional() }).strict();
@@ -185,6 +188,7 @@ export class AgentService {
                 maxTurns: this.settings.maxTurns, signal: this.controller.signal, history: this.history,
                 traceContext,
                 requestHuman: request => this.requestHuman(request), approvalMode: this.settings.approvalMode,
+                downloadDirectory: this.settings.downloadDirectory,
                 checkpoint: () => this.checkpoint(), hasSteering: () => this.steering.length > 0,
                 getSteering: () => {
                     const messages = this.steering.splice(0);

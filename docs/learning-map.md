@@ -96,9 +96,13 @@ The `complete_task` SDK tool records completion evidence. Ordinary final answers
 
 `task-view.js` renders the per-tab queue and parent/worker tree with text-only DOM insertion. Schedules are idle data until due and permission checks pass. Settings remain shared across agents, while prompts, conversations, screenshots, and requests are tied to their assigned tab/run.
 
+The authenticated `/tasks` endpoint and CLI `task-schedule/list/cancel/resume` commands control the same TaskManager, not a second worker process. The server binds browser scope from the paired extension and never accepts a caller-supplied scope or approval response through this route.
+
 ## Scoped file downloads
 
 `downloads-controller.js` checks tab access before every operation and tracks Chrome download IDs in session storage. It accepts HTTP(S) URLs, safe relative Downloads paths, or Chrome's Save As chooser; it never accepts dangerous-file warnings or opens files. Once Chrome returns an ID, later tracking errors return that ID with a warning rather than encourage duplicate transfers. CLI/MCP schemas mirror these fixed operations. Workspace approval shows the concrete URL and destination.
+
+`local-downloads.mjs` is an explicit alternative for public links when a host cannot expose Chrome downloads. It streams without cookies, checks originating-tab permission during transfer, enforces a size/time bound, and publishes unique files without overwriting. Partial files are cleaned after errors/cancellation; persisted in-flight jobs become interrupted after restart. The configured folder is user-owned Settings data, never a model-supplied absolute path. The server requires an actually observed source link and archives only metadata, not file bytes. Native cancellation never invokes this alternative automatically.
 
 ## Verification
 

@@ -30,7 +30,7 @@ export function observedBrowserServer(server, {
         // Capture only between actions, so observing does not invalidate the image
         // coordinates of a pointer operation that has not executed yet.
         if (mode === "computer" && !result.isError && args?.tabId !== undefined &&
-            !["browser_screenshot", "browser_close", "browser_open"].includes(name)) {
+            !["browser_screenshot", "browser_close", "browser_open", "browser_download_local_status"].includes(name)) {
             signal?.throwIfAborted();
             const visual = await server.callToolResult("browser_screenshot", { tabId: args.tabId }, null, { signal });
             const shot = visual.content?.find(item => item.type === "image");

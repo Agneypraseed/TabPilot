@@ -54,7 +54,7 @@ test("CLI download forms route exact destination/ID options without network", as
     t.after(() => rm(directory, { recursive: true, force: true }));
     await copyFile(new URL("../cli.mjs", import.meta.url), join(directory, "cli.mjs"));
     await copyFile(new URL("../commands.mjs", import.meta.url), join(directory, "commands.mjs"));
-    await writeFile(join(directory, "bridge-client.mjs"), 'export const loadBridgeConfig = async () => ({}); export const requestBridge = async (method, tabId, params) => ({ method, tabId, params });');
+    await writeFile(join(directory, "bridge-client.mjs"), 'export const loadBridgeConfig = async () => ({}); export const requestTask = async command => command; export const requestBridge = async (method, tabId, params) => ({ method, tabId, params });');
     const execute = promisify(execFile);
     const cli = async (...args) => JSON.parse((await execute(process.execPath, [join(directory, "cli.mjs"), ...args])).stdout);
     assert.deepEqual(await cli("download", "12", "https://example.com/file", "research/file.pdf", "--save-as"), {
@@ -62,6 +62,11 @@ test("CLI download forms route exact destination/ID options without network", as
     });
     assert.equal((await cli("download", "12", "https://example.com/file", "--save-as")).params.filename, undefined);
     for (const method of ["download-status", "download-cancel"]) assert.deepEqual(await cli(method, "12", "40"), { method, tabId: 12, params: { downloadId: 40 } });
+    const task = await cli("task-schedule", "12", "Read title", "60");
+    assert.equal(task.method, "task-create");
+    assert.equal(task.payload.tabId, 12);
+    assert.ok(task.payload.notBefore > Date.now() + 50000);
+    assert.deepEqual(await cli("task-list", "12"), { method: "task-list", payload: { tabId: 12 } });
     for (const args of [["download", "12", "https://example.com/file", "../a"], ["download", "12", "https://example.com/file", "--bad"],
         ["download-status", "12", "1.5"], ["download-cancel", "12", "-1"]]) await assert.rejects(cli(...args));
 });

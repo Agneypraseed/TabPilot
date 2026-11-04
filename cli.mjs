@@ -1,4 +1,4 @@
-import { loadBridgeConfig, requestBridge } from "./bridge-client.mjs";
+import { loadBridgeConfig, requestBridge, requestTask } from "./bridge-client.mjs";
 import { parseBrowserCommand } from "./commands.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -16,6 +16,10 @@ const usage = `Usage: node cli.mjs <command>
   screenshot TAB [NEW_FILE.jpg]
   download TAB URL [RELATIVE_FILENAME] [--save-as]
   download-status TAB DOWNLOAD_ID | download-cancel TAB DOWNLOAD_ID
+  download-local TAB PUBLIC_URL [RELATIVE_FILENAME]
+  download-local-status TAB JOB_UUID | download-local-cancel TAB JOB_UUID
+  task-list [TAB] | task-schedule TAB PROMPT [DELAY_SECONDS]
+  task-cancel TASK_UUID | task-resume TASK_UUID TAB
   pointer TAB '{"screenshotId":"...","x":100,"y":200}'
   command TAB '{"method":"scroll","params":{"deltaY":500,"deltaX":0}}'
 Tabs must be explicitly enabled. Refs come from the latest snapshot.`;
@@ -23,6 +27,28 @@ Tabs must be explicitly enabled. Refs come from the latest snapshot.`;
 async function main() {
     const [input, id, ...args] = process.argv.slice(2);
     if (["help", "--help", "-h"].includes(input)) { console.log(usage); return; }
+    if (input?.startsWith("task-")) {
+        let method = input, payload;
+        const validTab = value => /^\d+$/.test(value ?? "") && Number.isSafeInteger(Number(value));
+        if (input === "task-list") {
+            if (args.length || (id !== undefined && !validTab(id))) throw new Error(usage);
+            payload = id === undefined ? {} : { tabId: Number(id) };
+        } else if (input === "task-schedule") {
+            if (!validTab(id) || args.length < 1 || args.length > 2 || (args[1] !== undefined && !/^\d+$/.test(args[1]))) throw new Error(usage);
+            const delay = Number(args[1] ?? 0);
+            if (!Number.isSafeInteger(delay) || delay > 30 * 24 * 60 * 60) throw new Error("Delay must be 0–2592000 seconds.");
+            method = "task-create";
+            payload = { tabId: Number(id), prompt: args[0], mode: "browser", notBefore: Date.now() + delay * 1000 };
+        } else if (input === "task-cancel") {
+            if (args.length) throw new Error(usage);
+            payload = { taskId: id };
+        } else if (input === "task-resume") {
+            if (args.length !== 1 || !validTab(args[0])) throw new Error(usage);
+            payload = { taskId: id, tabId: Number(args[0]) };
+        } else throw new Error(usage);
+        console.log(JSON.stringify(await requestTask({ method, payload }), null, 2));
+        return;
+    }
     if (input === "pair" || input === "tabs") {
         if (id !== undefined) throw new Error(usage);
         if (input === "pair") console.log((await loadBridgeConfig()).token);
@@ -33,7 +59,14 @@ async function main() {
     const tabId = Number(id);
     let method = input, params = {}, output;
     const count = (min, max = min) => { if (args.length < min || args.length > max) throw new Error(usage); };
-    if (method === "download") {
+    if (method === "download-local") {
+        count(1, 2);
+        params = { url: args[0], ...(args[1] ? { filename: args[1] } : {}) };
+    }
+    else if (["download-local-status", "download-local-cancel"].includes(method)) {
+        count(1); params = { downloadId: args[0] };
+    }
+    else if (method === "download") {
         count(1, 3);
         const saveAs = args.at(-1) === "--save-as";
         const values = saveAs ? args.slice(0, -1) : args;

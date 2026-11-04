@@ -7,6 +7,12 @@ test("download approval identifies exact URL and location and status does not as
     assert.match(requests[0].detail, /Downloads\/research\/report.pdf/);
     await policy.beforeTool("browser_download_status", { tabId: 12, downloadId: 9 });
     assert.equal(requests.length, 1);
+    const local = browserApprovalPolicy({ downloadDirectory: "D:\\Reports", requestHuman: async request => { requests.push(request); return { decision: "deny" }; } });
+    const denied = await local.beforeTool("browser_download_local", { tabId: 12, url: "https://example.com/report.pdf", filename: "study/report.pdf" });
+    assert.equal(denied.isError, true);
+    assert.match(requests[1].detail, /D:\\Reports/);
+    assert.match(requests[1].detail, /study\/report.pdf/);
+    assert.match(requests[1].detail, /without browser cookies/);
 });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";

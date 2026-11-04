@@ -98,13 +98,17 @@ export class TaskManager {
             this.emit(); return this.snapshot();
         }
         if (!this.connection || (payload.scope && payload.scope !== this.connection.scope)) throw new Error("Reconnect the browser before controlling tasks.");
+        if (method === "task-list") {
+            const tabId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().parse(payload.tabId);
+            return { tasks: this.snapshot().jobs.filter(job => tabId === undefined || job.tabId === tabId) };
+        }
         if (method === "select-tab") {
             this.selectedTab = z.number().int().nonnegative().parse(payload.tabId);
             this.emit(); return this.snapshot();
         }
         if (method === "start" || method === "task-create") {
             const input = taskInputSchema.parse({ notBefore: this.now(), ...payload, scope: this.connection.scope, profileId: this.connection.profileId });
-            this.selectedTab = input.tabId;
+            if (method === "start" || this.selectedTab === null) this.selectedTab = input.tabId;
             await this.create(input);
             await this.tick();
             return this.snapshot();

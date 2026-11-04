@@ -25,7 +25,7 @@ export function humanHelpTool(requestHuman) {
   });
 }
 
-export function browserApprovalPolicy({ requestHuman, mode = "important" }) {
+export function browserApprovalPolicy({ requestHuman, mode = "important", downloadDirectory }) {
   const targets = new Map();
   const verificationPages = new Map();
   return {
@@ -49,6 +49,7 @@ export function browserApprovalPolicy({ requestHuman, mode = "important" }) {
         "browser_focus",
         "browser_hover",
         "browser_download_status",
+        "browser_download_local_status",
       ].includes(name);
       if (read) return;
       const target = targets.get(args?.tabId)?.get(args?.ref);
@@ -59,7 +60,7 @@ export function browserApprovalPolicy({ requestHuman, mode = "important" }) {
         return { isError: true, content: [{ type: "text", text: response.decision === "done" ? "The user handled verification. Do not execute the old proposed action; take a fresh snapshot before continuing." : "The user declined the verification handoff. Stop or ask for another approach." }] };
       }
       const important =
-        ["browser_close", "browser_download"].includes(name) ||
+        ["browser_close", "browser_download", "browser_download_local"].includes(name) ||
         (name === "browser_press" && /(^|\+)enter$/i.test(args?.key ?? "")) ||
         (name === "browser_pointer" &&
           [undefined, "click", "drag"].includes(args?.kind)) ||
@@ -73,7 +74,7 @@ export function browserApprovalPolicy({ requestHuman, mode = "important" }) {
         kind: "approval",
         question: `Allow the agent to ${description}?`,
         detail:
-          name === "browser_download" ? `URL: ${args.url}\nDestination: ${args.saveAs ? "Choose a location in Chrome's Save As dialog" : `Downloads/${args.filename || "(filename from the server)"}`}\nThis starts one download. Chrome may ask you to choose a location; handle that dialog in the browser. The agent cannot accept dangerous-download warnings or open the file.` : "This approves this one proposed action. You can decline and give the agent another direction.",
+          name === "browser_download_local" ? `Public link: ${args.url}\nLocal folder: ${downloadDirectory || "the folder configured in Settings"}\nFilename: ${args.filename || "chosen from the URL"}\nThis is a separate local transfer, without browser cookies or sign-in credentials. Existing files are preserved.` : name === "browser_download" ? `URL: ${args.url}\nDestination: ${args.saveAs ? "Choose a location in Chrome's Save As dialog" : `Downloads/${args.filename || "(filename from the server)"}`}\nThis starts one download. Chrome may ask you to choose a location; handle that dialog in the browser. The agent cannot accept dangerous-download warnings or open the file.` : "This approves this one proposed action. You can decline and give the agent another direction.",
       });
       if (result.decision !== "approve")
         return {
