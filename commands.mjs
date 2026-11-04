@@ -3,7 +3,19 @@ import { z } from "zod";
 const tabId = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const ref = z.string().min(1).max(100);
 const tab = { tabId };
+const downloadId = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const downloadUrl = z.string().max(4000).refine(value => {
+    try { const url = new URL(value); return /^https?:\/\//i.test(value) && /^https?:$/.test(url.protocol)
+        && !url.username && !url.password && !/[\u0000-\u0020\u007f-\u009f]/.test(value); } catch { return false; }
+}, "Use an absolute HTTP(S) URL without embedded credentials.");
+const downloadFilename = z.string().min(1).max(1000).refine(value =>
+    !/[\u0000-\u001f\u007f-\u009f<>:"|?*\\]/.test(value) && value.split("/").every(part =>
+        part && part !== "." && part !== ".." && !/[. ]$/.test(part) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)),
+"Use a safe relative Downloads path with forward slashes, or saveAs for another location.");
 export const actionParameters = {
+    download: z.object({ url: downloadUrl, filename: downloadFilename.optional(), saveAs: z.boolean().optional() }).strict(),
+    "download-status": z.object({ downloadId }).strict(),
+    "download-cancel": z.object({ downloadId }).strict(),
     click: z.object({ ref, button: z.enum(["left", "right", "middle"]).optional(), clickCount: z.number().int().min(1).max(2).optional() }).strict(),
     hover: z.object({ ref }).strict(),
     fill: z.object({ ref, text: z.string().max(20000) }).strict(),
@@ -30,6 +42,9 @@ export const commandSchema = z.discriminatedUnion("method", Object.entries(actio
 export const parseBrowserCommand = value => commandSchema.parse(value);
 
 export const commandDescriptions = {
+    download: "Start an HTTP(S) file download from an enabled tab. filename is a relative path under Chrome Downloads; saveAs opens Chrome's native destination chooser. Existing files are uniquified. A returned ID means started, not complete: check browser_download_status. Never repeat a start just because status is unavailable; Chrome retains danger prompts.",
+    "download-status": "Inspect only a download started for this enabled tab. Returns Chrome state, final filename and danger/error details when available. Only state=complete verifies completion.",
+    "download-cancel": "Cancel only a download started for this enabled tab, then inspect its current state.",
     click: "Click a current element ref. Returns a fresh snapshot; use its refs for the next action.",
     hover: "Move the pointer over an element ref, for example to reveal a menu.",
     fill: "Replace an editable element's contents with exact text. Uses trusted keyboard input and returns fresh page state.",
@@ -49,4 +64,4 @@ export const commandDescriptions = {
     coordinate: "Click, hover, or drag using IMAGE PIXEL coordinates from a recent browser_screenshot. Supply its screenshotId; capture again after any page/scroll change. For drag supply toX/toY. Prefer element refs when available."
 };
 
-export const mcpActionName = method => method === "coordinate" ? "browser_pointer" : `browser_${method}`;
+export const mcpActionName = method => method === "coordinate" ? "browser_pointer" : `browser_${method.replaceAll("-", "_")}`;

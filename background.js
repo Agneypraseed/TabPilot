@@ -1,8 +1,10 @@
 importScripts("page-runtime.js");
 importScripts("browser-controller.js");
+importScripts("downloads-controller.js");
 importScripts("attention-alerts.js");
 
 const browser = new TabPilotBrowser(chrome, tabPilotPage);
+const downloads = new TabPilotDownloads(chrome, { permitted: tabId => browser.permitted(tabId) });
 const attentionAlerts = new TabPilotAttentionAlerts(chrome);
 
 let bridgeSocket = null;
@@ -10,6 +12,17 @@ let bridgeReady = false;
 let agentState = null;
 const agentRequests = new Map();
 let historyScopePromise;
+let browserProfilePromise;
+function browserProfileId() {
+    return browserProfilePromise ??= (async () => {
+        if (!chrome.storage.local) return crypto.randomUUID();
+        const stored = await chrome.storage.local.get("browserProfileId");
+        if (typeof stored.browserProfileId === "string" && /^[a-f0-9-]{36}$/i.test(stored.browserProfileId)) return stored.browserProfileId;
+        const profileId = crypto.randomUUID();
+        await chrome.storage.local.set({ browserProfileId: profileId });
+        return profileId;
+    })();
+}
 function historyScope() {
     return historyScopePromise ??= (async () => {
         if (!chrome.storage.local) return crypto.randomUUID();
@@ -128,7 +141,7 @@ function connectBridge(token) {
             reject(new Error("Bridge connection timed out."));
         }, 5000);
         socket.onopen = async () => {
-            try { socket.send(JSON.stringify({ type: "authenticate", token, historyScope: await historyScope() })); }
+            try { socket.send(JSON.stringify({ type: "authenticate", token, historyScope: await historyScope(), profileId: await browserProfileId() })); }
             catch { socket.close(); reject(new Error("Could not initialize local tab history.")); }
         };
         socket.onmessage = async (event) => {
@@ -161,9 +174,18 @@ function connectBridge(token) {
             if (!ready || message.type !== "request" || typeof message.id !== "string") return;
             try {
                 let data;
-                if (message.method === "tabs") data = await listEnabledTabs();
+                if (message.method === "approved-research") {
+                    await browser.permitted(message.params?.sourceTabId);
+                    const tab = await chrome.tabs.get(message.tabId);
+                    if (tab.url !== message.params?.url || !/^https?:\/\//i.test(tab.url ?? "")) throw new Error("Research tab changed after approval. Ask again for the current page.");
+                    data = await browser.setAccess(message.tabId, true);
+                }
+                else if (message.method === "tabs") data = await listEnabledTabs();
                 else if (message.method === "snapshot") data = await readTabSnapshot(message.tabId);
                 else if (message.method === "screenshot") data = await browser.screenshot(message.tabId);
+                else if (message.method === "download") data = await downloads.start(message.tabId, message.params);
+                else if (message.method === "download-status") data = await downloads.status(message.tabId, message.params?.downloadId);
+                else if (message.method === "download-cancel") data = await downloads.cancel(message.tabId, message.params?.downloadId);
                 else data = await browser.action(message.tabId, message.method, message.params);
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: "response", id: message.id, ok: true, data }));

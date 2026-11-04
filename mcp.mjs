@@ -41,7 +41,7 @@ export function createTabPilotMcp({ request = (method, tabId, params) => request
 
     for (const [method, schema] of Object.entries(actionParameters)) {
         if (method === "screenshot") continue;
-        const readOnly = method === "wait";
+        const readOnly = ["wait", "download-status"].includes(method);
         server.registerTool(mcpActionName(method), {
             description: commandDescriptions[method],
             inputSchema: { tabId: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), ...schema.shape },

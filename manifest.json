@@ -13,6 +13,7 @@
     "storage",
     "debugger",
     "tabs",
+    "downloads",
     "sidePanel",
     "notifications",
     "offscreen"

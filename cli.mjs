@@ -14,6 +14,8 @@ const usage = `Usage: node cli.mjs <command>
   open SOURCE_TAB URL | close TAB
   wait TAB [TEXT] | dialog TAB accept|dismiss [PROMPT_TEXT]
   screenshot TAB [NEW_FILE.jpg]
+  download TAB URL [RELATIVE_FILENAME] [--save-as]
+  download-status TAB DOWNLOAD_ID | download-cancel TAB DOWNLOAD_ID
   pointer TAB '{"screenshotId":"...","x":100,"y":200}'
   command TAB '{"method":"scroll","params":{"deltaY":500,"deltaX":0}}'
 Tabs must be explicitly enabled. Refs come from the latest snapshot.`;
@@ -31,7 +33,19 @@ async function main() {
     const tabId = Number(id);
     let method = input, params = {}, output;
     const count = (min, max = min) => { if (args.length < min || args.length > max) throw new Error(usage); };
-    if (["click", "hover"].includes(method)) { count(1); params = { ref: args[0] }; }
+    if (method === "download") {
+        count(1, 3);
+        const saveAs = args.at(-1) === "--save-as";
+        const values = saveAs ? args.slice(0, -1) : args;
+        if (values.length < 1 || values.length > 2 || values.some(value => value.startsWith("--"))) throw new Error(usage);
+        params = { url: values[0], ...(values[1] !== undefined ? { filename: values[1] } : {}), ...(saveAs ? { saveAs: true } : {}) };
+    }
+    else if (["download-status", "download-cancel"].includes(method)) {
+        count(1);
+        if (!/^\d+$/.test(args[0])) throw new Error(usage);
+        params = { downloadId: Number(args[0]) };
+    }
+    else if (["click", "hover"].includes(method)) { count(1); params = { ref: args[0] }; }
     else if (method === "fill") { count(2); params = { ref: args[0], text: args[1] }; }
     else if (method === "select") { count(2, 101); params = { ref: args[0], values: args.slice(1) }; }
     else if (method === "press") { count(1, 2); params = { key: args[0], ...(args[1] ? { ref: args[1] } : {}) }; }
