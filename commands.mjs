@@ -19,6 +19,10 @@ export const actionParameters = {
     close: z.object({}).strict(),
     wait: z.object({ text: z.string().min(1).max(1000).optional(), timeoutMs: z.number().int().min(100).max(10000).optional() }).strict(),
     dialog: z.object({ accept: z.boolean(), promptText: z.string().max(1000).optional() }).strict()
+    ,screenshot: z.object({}).strict()
+    ,coordinate: z.object({ screenshotId: z.string().min(1).max(100), kind: z.enum(["click", "hover", "drag"]).optional(),
+        x: z.number().nonnegative(), y: z.number().nonnegative(), toX: z.number().nonnegative().optional(), toY: z.number().nonnegative().optional(),
+        button: z.enum(["left", "right", "middle"]).optional(), clickCount: z.number().int().min(1).max(2).optional() }).strict()
 };
 export const commandSchema = z.discriminatedUnion("method", Object.entries(actionParameters)
     .map(([method, params]) => z.object({ method: z.literal(method), ...tab, params }).strict()));

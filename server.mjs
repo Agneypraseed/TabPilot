@@ -77,7 +77,7 @@ export function createBridge({ token, timeoutMs = 20000 }) {
         });
         extension.send(JSON.stringify({ type: "request", id, ...command }));
     });
-    const webSockets = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 });
+    const webSockets = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
     server.on("upgrade", (request, socket, head) => {
         if (request.url !== "/extension" ||
             request.headers.host !== `127.0.0.1:${server.address().port}` ||

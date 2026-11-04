@@ -1,5 +1,14 @@
 // Serialized into Chrome's isolated world. Keep every helper inside this function.
 function tabPilotPage(operation = "snapshot", args = {}) {
+    if (operation === "fingerprint") {
+        const key = "__tabPilotVisualV1";
+        if (!globalThis[key] || globalThis[key].document !== document) {
+            const visual = { document, id: crypto.randomUUID(), revision: 0 };
+            new MutationObserver(() => { visual.revision++; }).observe(document, { subtree: true, attributes: true, childList: true, characterData: true });
+            globalThis[key] = visual;
+        }
+        return { id: globalThis[key].id, revision: globalThis[key].revision };
+    }
     if (operation === "status") return { ready: ["interactive", "complete"].includes(document.readyState),
         matches: !args.text || (document.body?.innerText || "").includes(args.text) };
     const stateKey = "__tabPilotPageV1";

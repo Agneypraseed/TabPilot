@@ -27,6 +27,8 @@ export function controllerFixture() {
                 if (method === "Runtime.evaluate" && params.expression.includes(')("status",')) return { result: { value: { ready: true, matches: true } } };
                 if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
                 if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1000, clientHeight: 800 } };
+                if (method === "Page.captureScreenshot") return { data: "test-image-base64" };
+                if (method === "Runtime.evaluate" && params.expression.includes(')("fingerprint",')) return { result: { value: { id: "page-1", revision: 1 } } };
                 if (method === "Runtime.evaluate" && params.expression.includes(')("resolve",')) return { result: { value: {
                     x: 10, y: 20, width: 100, height: 30, editable: true, tag: "input", type: "text"
                 } } };
@@ -105,4 +107,20 @@ test("navigation/history stay within web pages and newly created tabs start disa
     await browser.action(12, "close");
     assert.equal(stored["tab:12"], undefined);
     assert.ok(calls.some(call => call.method === "remove" && call.id === 12));
+});
+
+test("screenshots are bound to enabled tabs and stale coordinates are rejected", async () => {
+    const { browser, calls, handlers } = controllerFixture();
+    await assert.rejects(browser.screenshot(12), /Access disabled/);
+    await browser.setAccess(12, true);
+    const screenshot = await browser.screenshot(12);
+    assert.equal(screenshot.mimeType, "image/jpeg");
+    assert.equal(screenshot.width, 1000);
+    await assert.rejects(browser.action(12, "coordinate", { screenshotId: screenshot.screenshotId, x: 1001, y: 10 }), /inside/);
+    await browser.action(12, "coordinate", { screenshotId: screenshot.screenshotId, x: 40, y: 50 });
+    assert.ok(calls.some(call => call.params?.type === "mousePressed" && call.params.x === 40 && call.params.y === 50));
+    await assert.rejects(browser.action(12, "coordinate", { screenshotId: screenshot.screenshotId, x: 40, y: 50 }), /STALE_SCREENSHOT/);
+    const fresh = await browser.screenshot(12);
+    handlers.event({ tabId: 12 }, "Page.frameNavigated", {});
+    await assert.rejects(browser.action(12, "coordinate", { screenshotId: fresh.screenshotId, x: 40, y: 50 }), /STALE_SCREENSHOT/);
 });

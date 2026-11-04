@@ -191,11 +191,62 @@ class TabPilotBrowser {
         throw new Error("Wait timed out; take a fresh snapshot to inspect the current page.");
     }
 
+    screenshot(tabId) {
+        return this.serial(tabId, async () => {
+            if (this.dialogs.has(tabId)) throw new Error("Dismiss the JavaScript dialog before taking a screenshot.");
+            const { cssVisualViewport: viewport } = await this.command(tabId, "Page.getLayoutMetrics");
+            const scale = Math.min(1, 1400 / viewport.clientWidth);
+            const before = await this.evaluate(tabId, "fingerprint");
+            const image = await this.command(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 70, fromSurface: true,
+                captureBeyondViewport: false, clip: { x: viewport.pageX, y: viewport.pageY,
+                    width: viewport.clientWidth, height: viewport.clientHeight, scale } });
+            const after = await this.evaluate(tabId, "fingerprint");
+            if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("Page changed during capture; take another screenshot.");
+            await this.permitted(tabId);
+            if (typeof image.data !== "string" || image.data.length > 6 * 1024 * 1024) throw new Error("Screenshot exceeds the supported size.");
+            const screenshotId = crypto.randomUUID();
+            const width = Math.round(viewport.clientWidth * scale), height = Math.round(viewport.clientHeight * scale);
+            this.screenshots.set(tabId, { screenshotId, viewport, fingerprint: after, scale, width, height, time: Date.now() });
+            return { screenshotId, mimeType: "image/jpeg", data: image.data, width, height,
+                coordinateSpace: "image pixels", viewport: { width: viewport.clientWidth, height: viewport.clientHeight } };
+        });
+    }
+
+    async pointer(tabId, params) {
+        const screenshot = this.screenshots.get(tabId);
+        if (!screenshot || screenshot.screenshotId !== params.screenshotId || Date.now() - screenshot.time > 30000) {
+            throw new Error("STALE_SCREENSHOT: capture a fresh screenshot before coordinate actions.");
+        }
+        const { cssVisualViewport: viewport } = await this.command(tabId, "Page.getLayoutMetrics");
+        const current = await this.evaluate(tabId, "fingerprint");
+        if (JSON.stringify(current) !== JSON.stringify(screenshot.fingerprint) ||
+            ["pageX", "pageY", "clientWidth", "clientHeight"].some(key => viewport[key] !== screenshot.viewport[key])) {
+            throw new Error("STALE_SCREENSHOT: page, scroll, or viewport changed; capture again.");
+        }
+        const point = (x, y) => {
+            if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= screenshot.width || y >= screenshot.height) throw new Error("Coordinates must be inside the screenshot image.");
+            return { x: x / screenshot.scale, y: y / screenshot.scale };
+        };
+        const from = point(params.x, params.y);
+        if (params.kind === "hover") return this.mouse(tabId, "mouseMoved", from.x, from.y);
+        if (params.kind === "click" || params.kind === undefined) return this.clickPoint(tabId, from.x, from.y, params.button, params.clickCount);
+        if (params.kind !== "drag") throw new Error("Unknown pointer operation.");
+        const to = point(params.toX, params.toY);
+        await this.mouse(tabId, "mouseMoved", from.x, from.y);
+        await this.mouse(tabId, "mousePressed", from.x, from.y, { button: "left", buttons: 1, clickCount: 1 });
+        try {
+            for (let step = 1; step <= 12; step++) await this.mouse(tabId, "mouseMoved", from.x + (to.x - from.x) * step / 12,
+                from.y + (to.y - from.y) * step / 12, { button: "left", buttons: 1 });
+        } finally { await this.mouse(tabId, "mouseReleased", to.x, to.y, { button: "left", clickCount: 1 }); }
+    }
+
     action(tabId, method, params = {}) {
         return this.serial(tabId, async () => {
             if (this.dialogs.has(tabId) && method !== "dialog") throw new Error("A JavaScript dialog is open. Use browser_dialog first.");
             let result = {};
-            if (method === "navigate") {
+            if (method === "coordinate") {
+                await this.pointer(tabId, params);
+            } else if (method === "navigate") {
                 const navigation = await this.command(tabId, "Page.navigate", { url: this.httpUrl(params.url) });
                 if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
                 this.invalidate(tabId);
