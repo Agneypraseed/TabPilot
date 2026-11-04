@@ -234,13 +234,14 @@ test("missing responses time out and extension disconnects fail promptly", async
 
 test("real background handler enforces permissions through the bridge", async (t) => {
     const api = await setup(t);
-    const stored = { "tab:12": true };
+    const stored = { "tab:99": false };
     let removed;
     let reads = 0;
     const chrome = {
         runtime: { id: "test", onMessage: { addListener() {} } },
         tabs: {
             onRemoved: { addListener(fn) { removed = fn; } },
+            query: async () => [{ id: 12, title: "Example", url: "https://example.com/" }, { id: 99, url: "https://other.example/" }].filter(tab => tab.id !== 12 || stored["tab:12"] !== "closed"),
             get: async (id) => ({ id, title: "Example", url: "https://example.com/" })
         },
         storage: { session: {
@@ -278,6 +279,8 @@ test("real background handler enforces permissions through the bridge", async (t
     assert.equal(reads, 1, "revoked access must block additional reads");
     stored["tab:12"] = true;
     removed(12);
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(stored["tab:12"], undefined);
+    stored["tab:12"] = "closed";
     assert.deepEqual((await (await api.request("/tabs")).json()).data, []);
 });

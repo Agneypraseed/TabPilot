@@ -412,21 +412,19 @@
       ? "API keys stay on your local bridge."
       : "Add this provider’s API key to .env.local and restart the bridge.";
   }
-  async function refreshTabs(preferActive = false) {
-    const [available, stored] = await Promise.all([
-      chrome.tabs.query(
-        sourceWindow && /^\d+$/.test(sourceWindow)
-          ? { windowId: Number(sourceWindow) }
-          : { currentWindow: true },
-      ),
-      chrome.storage.session.get(null),
+  async function refreshTabs(preferActive = false, activeTabId) {
+    const [available, stored, current] = await Promise.all([
+      chrome.tabs.query({}),
+      TabPilotTabAccess.read(chrome),
+      preferActive && activeTabId === undefined ? chrome.tabs.query(sourceWindow && /^\d+$/.test(sourceWindow)
+        ? { active: true, windowId: Number(sourceWindow) } : { active: true, currentWindow: true }) : [],
     ]);
-    tabs = available.filter((tab) => /^https?:\/\//.test(tab.url || ""));
+    tabs = available.filter((tab) => TabPilotTabAccess.supported(tab.url));
     const oldId = selected?.id;
     const desired = active() && !agent?.jobs
       ? agent.tabId
       : preferActive
-        ? (initialTarget && initialTab) || available.find((t) => t.active)?.id
+        ? (initialTarget && initialTab) || activeTabId || current.find(t => TabPilotTabAccess.supported(t.url))?.id || available.find((t) => t.active)?.id
         : oldId;
     initialTarget = false;
     selected =
@@ -437,7 +435,7 @@
       null;
     tabs = tabs.map((tab) => ({
       ...tab,
-      enabled: stored[`tab:${tab.id}`] === true,
+      enabled: TabPilotTabAccess.enabled(stored, tab.id),
     }));
     selected = tabs.find((tab) => tab.id === selected?.id) ?? null;
     $("target-tab").replaceChildren();
@@ -449,7 +447,7 @@
     for (const tab of tabs) {
       const option = document.createElement("option");
       option.value = String(tab.id);
-      option.textContent = tab.title || host(tab.url);
+      option.textContent = `${tab.title || "Web tab"} · ${host(tab.url)}`;
       $("target-tab").append(option);
     }
     if (selected) $("target-tab").value = String(selected.id);
@@ -475,9 +473,7 @@
     $("target-domain").textContent = selected
       ? host(selected.url)
       : "Choose a browser tab";
-    $("settings-tab-name").textContent = selected?.title || "No tab selected";
-    $("settings-tab-domain").textContent = selected ? host(selected.url) : "";
-    for (const id of ["access-toggle", "settings-access"]) {
+    for (const id of ["access-toggle"]) {
       $(id).setAttribute("aria-checked", String(Boolean(selected?.enabled)));
       $(id).disabled = !selected || accessBusy;
     }
@@ -486,10 +482,7 @@
       document.createElement("br"),
       selected?.enabled ? "enabled" : "disabled",
     );
-    $("settings-access").setAttribute(
-      "aria-label",
-      selected?.enabled ? "Disable selected tab" : "Enable selected tab",
-    );
+    renderTabAccess();
     $("mode-browser").setAttribute("aria-pressed", String(mode === "browser"));
     $("mode-computer").setAttribute(
       "aria-pressed",
@@ -537,7 +530,7 @@
               ? "New guidance applies before the next action. Enter to send."
               : mode === "computer"
                 ? "Watch it work in your tab. Pause any time."
-                : "Only tabs you enable are shared.";
+                : "Web tabs have access by default. Manage access in Settings.";
     $("save-settings").disabled = !connected || !agent || active();
     if (agent?.settings) {
       $("model-label").replaceChildren(
@@ -546,6 +539,40 @@
       );
     } else $("model-label").textContent = "Connect your local bridge ⌄";
     taskView?.render(agent, connected);
+  }
+  let tabAccessSignature = "";
+  function renderTabAccess() {
+    const signature = JSON.stringify(tabs.map(tab => [tab.id, tab.title, tab.url, tab.enabled, tab.active]));
+    if (signature === tabAccessSignature) return;
+    tabAccessSignature = signature;
+    const list = $("settings-tab-list");
+    list.replaceChildren();
+    if (!tabs.length) { list.textContent = "No open web tabs."; return; }
+    for (const tab of tabs) {
+      const row = document.createElement("div"); row.className = "tab-access-row";
+      const text = document.createElement("div"); text.className = "tab-access-title";
+      const title = document.createElement("strong"); title.textContent = tab.title || host(tab.url);
+      const url = document.createElement("span"); url.textContent = tab.url;
+      text.append(title, url);
+      const show = document.createElement("button"); show.textContent = "Show"; show.type = "button";
+      show.addEventListener("click", async () => {
+        try { await chrome.tabs.update(tab.id, { active: true }); await chrome.windows?.update(tab.windowId, { focused: true }); }
+        catch (error) { notice(error.message); }
+      });
+      const toggle = document.createElement("button"); toggle.type = "button";
+      toggle.textContent = tab.enabled ? "Revoke" : "Restore";
+      toggle.setAttribute("aria-label", `${tab.enabled ? "Revoke" : "Restore"} access: ${tab.title || host(tab.url)}`);
+      toggle.addEventListener("click", async () => {
+        toggle.disabled = true;
+        try {
+          const response = await request("tabpilot:access", { tabId: tab.id, enabled: !tab.enabled });
+          tab.enabled = response.enabled;
+          await refreshTabs();
+        } catch (error) { notice(error.message); }
+        finally { toggle.disabled = false; }
+      });
+      row.append(text, show, toggle); list.append(row);
+    }
   }
   function renderMessages() {
     const events = agent?.events || [];
@@ -715,7 +742,7 @@
       refreshHistory();
     }
   });
-  for (const id of ["access-toggle", "settings-access"])
+  for (const id of ["access-toggle"])
     $(id).addEventListener("click", toggleAccess);
   for (const value of ["browser", "computer"])
     $("mode-" + value).addEventListener("click", () => {
@@ -893,8 +920,8 @@
       receive(message.state);
     }
   });
-  chrome.tabs.onActivated.addListener(() =>
-    refreshTabs(agent?.jobs ? true : !active()).catch((e) => notice(e.message)),
+  chrome.tabs.onActivated.addListener(info =>
+    refreshTabs(agent?.jobs ? true : !active(), info?.tabId).catch((e) => notice(e.message)),
   );
   chrome.tabs.onUpdated.addListener((_id, change) => {
     if (change.status === "complete" || change.title)
@@ -902,7 +929,7 @@
   });
   chrome.tabs.onRemoved.addListener(() => refreshTabs().catch(() => {}));
   chrome.storage.onChanged.addListener((_changes, area) => {
-    if (area === "session") refreshTabs().catch(() => {});
+    if (area === "session" || (area === "local" && _changes.tabAccessRevocations)) refreshTabs().catch(() => {});
   });
   // Recover state if the panel was closed/reopened; the run lives in Node.
   const poll = setInterval(

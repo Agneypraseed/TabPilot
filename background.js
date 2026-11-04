@@ -1,4 +1,5 @@
 importScripts("page-runtime.js");
+importScripts("tab-access.js");
 importScripts("browser-controller.js");
 importScripts("downloads-controller.js");
 importScripts("attention-alerts.js");
@@ -38,13 +39,14 @@ function historyScope() {
 chrome.runtime.onStartup?.addListener(() => {
     const scope = crypto.randomUUID();
     historyScopePromise = chrome.storage.local.set({ historyScope: scope }).then(() => scope);
+    void chrome.storage.local.remove?.("tabAccessRevocations");
 });
 
 // A persistent side panel remains visible while the agent uses the page.
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-    chrome.storage.session.remove(`tab:${tabId}`);
+    void browser.clearAccess(tabId).catch(() => {});
     void browser.detach(tabId);
 });
 
@@ -112,19 +114,10 @@ async function readTabSnapshot(tabId) {
 }
 
 async function listEnabledTabs() {
-    const stored = await chrome.storage.session.get(null);
-    const tabs = [];
-    for (const [key, enabled] of Object.entries(stored)) {
-        if (enabled !== true || !/^tab:\d+$/.test(key)) continue;
-        try {
-            const tab = await chrome.tabs.get(Number(key.slice(4)));
-            if ((await chrome.storage.session.get(key))[key] !== true) continue;
-            tabs.push({ id: tab.id, title: tab.title ?? "", url: tab.url ?? "" });
-        } catch {
-            // A tab may close while the list is being built.
-        }
-    }
-    return tabs;
+    const tabs = await chrome.tabs.query({});
+    const stored = await TabPilotTabAccess.read(chrome);
+    return tabs.filter(tab => TabPilotTabAccess.supported(tab.url) && TabPilotTabAccess.enabled(stored, tab.id))
+        .map(tab => ({ id: tab.id, title: tab.title ?? "", url: tab.url ?? "" }));
 }
 
 function connectBridge(token) {
@@ -174,13 +167,7 @@ function connectBridge(token) {
             if (!ready || message.type !== "request" || typeof message.id !== "string") return;
             try {
                 let data;
-                if (message.method === "approved-research") {
-                    await browser.permitted(message.params?.sourceTabId);
-                    const tab = await chrome.tabs.get(message.tabId);
-                    if (tab.url !== message.params?.url || !/^https?:\/\//i.test(tab.url ?? "")) throw new Error("Research tab changed after approval. Ask again for the current page.");
-                    data = await browser.setAccess(message.tabId, true);
-                }
-                else if (message.method === "tabs") data = await listEnabledTabs();
+                if (message.method === "tabs") data = await listEnabledTabs();
                 else if (message.method === "snapshot") data = await readTabSnapshot(message.tabId);
                 else if (message.method === "screenshot") data = await browser.screenshot(message.tabId);
                 else if (message.method === "download") data = await downloads.start(message.tabId, message.params);

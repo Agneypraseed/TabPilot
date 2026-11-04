@@ -212,11 +212,6 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
                 if (!entry) return;
                 pending.delete(message.id);
                 clearTimeout(entry.timer);
-                if (entry.internal) {
-                    if (message.ok === true) entry.resolve(message.data);
-                    else entry.reject(new Error(String(message.error ?? "Research tab permission failed.")));
-                    return;
-                }
                 void finishTrace(entry, message.ok === true, message.ok === true ? message.data : { error: String(message.error ?? "Extension request failed.") }).catch(historyFailure);
                 reply(entry.response, message.ok === true ? 200 : 409,
                     message.ok === true
@@ -230,7 +225,6 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
                 extension = null;
                 agentService?.disconnect();
                 for (const entry of pending.values()) {
-                    if (entry.internal) { clearTimeout(entry.timer); entry.reject(new Error("Extension disconnected.")); continue; }
                     const { response, timer } = entry;
                     clearTimeout(timer);
                     void finishTrace(entry, false, { error: "Extension disconnected; action outcome unknown." }).catch(historyFailure);
@@ -250,15 +244,6 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
 
     return {
         server,
-        approveResearchTab({ tabId, sourceTabId, url }) {
-            if (extension?.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Extension disconnected."));
-            const id = randomUUID();
-            return new Promise((resolve, reject) => {
-                const timer = setTimeout(() => { pending.delete(id); reject(new Error("Research permission timed out. Check the tab before retrying.")); }, timeoutMs);
-                pending.set(id, { internal: true, resolve, reject, timer });
-                extension.send(JSON.stringify({ type: "request", id, method: "approved-research", tabId, params: { sourceTabId, url } }));
-            });
-        },
         async close() {
             unsubscribe?.();
             unsubscribeHistory?.();
@@ -302,7 +287,6 @@ async function main() {
         const snapshot = await requestBridge("snapshot", tabId);
         requireObservedDownload(snapshot, url);
     } });
-    agentService.approveResearchTab = input => bridge.approveResearchTab(input);
     await new Promise((done, reject) => {
         bridge.server.once("error", reject);
         bridge.server.listen(4311, "127.0.0.1", done);

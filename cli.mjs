@@ -22,7 +22,7 @@ const usage = `Usage: node cli.mjs <command>
   task-cancel TASK_UUID | task-resume TASK_UUID TAB
   pointer TAB '{"screenshotId":"...","x":100,"y":200}'
   command TAB '{"method":"scroll","params":{"deltaY":500,"deltaX":0}}'
-Tabs must be explicitly enabled. Refs come from the latest snapshot.`;
+Web tabs have access by default. Revoked and protected tabs are blocked. Refs come from the latest snapshot.`;
 
 async function main() {
     const [input, id, ...args] = process.argv.slice(2);

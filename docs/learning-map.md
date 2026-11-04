@@ -46,7 +46,7 @@ A new snapshot replaces the previous ref map. Removed, renamed, disconnected, or
 
 A screenshot has its own short-lived ID. Its image pixel dimensions are decoded from the JPEG rather than inferred from CSS dimensions: display scaling and zoom make those different. Pointer coordinates are converted back to CSS coordinates for CDP. Navigation, scrolling, viewport changes, DOM mutations, and prior actions invalidate visual targeting. Canvas updates without DOM mutations cannot all be detected; always re-observe after acting.
 
-Navigation stays in an already enabled tab. New tabs start disabled, including tabs opened by an agent, and the user must enable them explicitly. Cross-origin iframe DOMs and closed shadow roots may need screenshot-based targeting.
+Navigation stays in an already enabled tab. All regular web tabs, including agent-created tabs, have access by default. A shared policy helper treats an explicit false as revocation; Settings can revoke/restore any open web tab across windows. Cross-origin iframe DOMs and closed shadow roots may need screenshot-based targeting.
 
 ## Side-panel task sessions
 
@@ -90,7 +90,7 @@ Live verification used the user-operated workspace with Meta `muse-spark-1.3` an
 
 The `complete_task` SDK tool records completion evidence. Ordinary final answers or max-turn errors do not complete a scheduled task: complete SDK tool history carries into another bounded stage. `task-checkpoint.mjs` removes function-tool image blocks from saved checkpoints while retaining tool call/result pairing. Restart resumes from a fresh observation instead of replaying unknown pending calls.
 
-`delegate_research` creates a disabled child tab and waits for a scoped user approval. The private paired WebSocket route checks the enabled source tab and exact approved URL before granting access; no grant-access command exists in CLI/MCP. Each specialist has its own tab/session/history. `collect_worker_result` suspends the coordinator's active budget until the actual child outcome arrives. Stopping the parent cancels unfinished children.
+`delegate_research` creates a child web tab, rechecks that it is accessible, and launches the specialist without an access prompt. Revoked or protected targets are rejected. The obsolete private grant route was removed, so delegation cannot silently restore a revoked tab. Each specialist has its own tab/session/history. `collect_worker_result` suspends the coordinator's active budget until the actual child outcome arrives. Stopping the parent cancels unfinished children.
 
 `agent.mjs` also reports SDK-local help, delegation, collection, and completion tool inputs/results. `agent-service.mjs` archives those directly, since they do not cross the HTTP browser boundary. Browser calls retain their central archive path without duplication; both appear in the activity trail.
 
@@ -115,3 +115,5 @@ Live testing also verified direct controls, same-tab navigation/history, and ope
 Live workspace acceptance verified Meta `muse-spark-1.3` asking a missing-information question, receiving Express, requesting new-tab approval, running a separate research specialist, and collecting the observed two-business-day result without an order submission. The user confirmed audible alerts. The foreground-only embedded-host failure led to the narrow tab-creation fallback. Chrome native download attempts returned USER_CANCELED without a chooser in this host; no successful native-download claim is made.
 
 The final acceptance runner scheduled a real task 60 seconds ahead. Its archived start was 513 ms after the deadline, its title observation was TabPilot Practice, and its completion tool input/result and final response were saved. A real MCP local download saved the 93-byte public practice report; independent filesystem comparison matched every byte and SHA-256. The ignored report is `.tabpilot/verification/workspace-live-report.json`. The running bridge remains paired; no additional reload is needed for these tested paths.
+
+Default access is now opt-out. `tab-access.js` shares supported-URL checks and the missing-entry-means-allowed rule across the worker and UI. Explicit false flags block every Chrome operation; local revocation IDs preserve that decision over extension reload, close removes the ID, and browser startup resets it for the new tab session. Per-tab writes are serialized so concurrent Settings changes cannot lose revocations. Canceling Chrome debugging revokes access; deliberate detach/cleanup does not silently re-enable a tab. Settings lists all open web tabs and safely renders titles/URLs with Show and Revoke/Restore controls. Earlier live notes describing research access approval reflect the previous opt-in policy, superseded by this change.

@@ -81,7 +81,7 @@ test("disconnect while initial store load is pending cannot resurrect connection
   assert.equal(runs, 0);
 });
 
-test("specialist delegation honors occupied global capacity before opening or granting a tab", async t => {
+test("specialist delegation honors occupied global capacity before opening a tab", async t => {
   let opened = 0, grants = 0, runs = 0;
   const { manager, scope, input } = fixture(t, { maxConcurrent: 1,
     browser: async method => {
@@ -127,7 +127,7 @@ test("exhausted paused task is not relaunched and cannot evict newer completed c
   assert.equal(runs, 2);
 });
 
-test("parallel specialist requests reserve the last slot and release it after denial", async t => {
+test("parallel specialist requests reserve the last slot and release it after finding access revoked", async t => {
   const openedGate = deferred(); let opened = 0;
   const { manager, scope, input } = fixture(t, { maxConcurrent: 2,
     browser: async method => {
@@ -142,7 +142,7 @@ test("parallel specialist requests reserve the last slot and release it after de
   const record = manager.records.get(created.id);
   record.status = "running";
   manager.executing.add(record.id);
-  const session = { checkpoint: async () => {}, controller: new AbortController(), requestHuman: async () => ({ decision: "deny" }), event: () => {} };
+  const session = { checkpoint: async () => {}, controller: new AbortController(), requestHuman: async () => { assert.fail("Research access must not prompt for approval"); }, event: () => {} };
   const delegate = manager.coordinatorTools(record, session).find(tool => tool.name === "delegate_research");
   const call = () => delegate.invoke(new RunContext(), JSON.stringify({ url: "https://example.test/source", task: "Read source" }));
   let requests;
@@ -150,12 +150,12 @@ test("parallel specialist requests reserve the last slot and release it after de
     requests = [call(), call()];
     await until(() => opened > 0);
     await flush();
-    assert.equal(opened, 1, "A pending approval must reserve the sole remaining slot");
+    assert.equal(opened, 1, "An opening tab must reserve the sole remaining slot");
   } finally { openedGate.resolve(); }
   try {
     await Promise.all(requests);
     await call();
-    assert.equal(opened, 2, "Denied research must release its capacity reservation");
+    assert.equal(opened, 2, "Revoked research must release its capacity reservation");
   } finally { manager.executing.delete(record.id); }
 });
 

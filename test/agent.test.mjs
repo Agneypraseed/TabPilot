@@ -59,7 +59,7 @@ test("agent checks browser availability before model usage and closes MCP on fai
             close: async () => { closed = true; }
         };
         const model = { getResponse: async () => assert.fail("Must not call model before a browser is ready") };
-        await assert.rejects(runBrowserAgent("Read a page", { server, model }), /Bridge disconnected|No enabled tabs/);
+        await assert.rejects(runBrowserAgent("Read a page", { server, model }), /Bridge disconnected|No accessible web tabs/);
         assert.equal(closed, true);
     }
 });

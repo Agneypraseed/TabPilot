@@ -227,7 +227,7 @@
             </select>
             <label for="schedule-stages">Stage limit</label>
             <input id="schedule-stages" type="number" min="1" max="200" value="20" required />
-            <label class="check-label"><input id="schedule-research" type="checkbox" checked /> Allow research specialists (asks for tab access)</label>
+            <label class="check-label"><input id="schedule-research" type="checkbox" checked /> Allow research specialists in new tabs</label>
             <button id="schedule-submit" class="primary full-width">Schedule task</button>
           </form>
         </details>
@@ -257,7 +257,7 @@
         >
           Connect your local bridge <span>⌄</span>
         </button>
-        <p id="composer-hint">Only tabs you enable are shared.</p>
+        <p id="composer-hint">Web tabs have access by default. Manage access in Settings.</p>
       </footer>
     </section>
     <section id="settings-view" hidden>
@@ -299,22 +299,8 @@
       </section>
       <section class="settings-section">
         <h3>Tab access</h3>
-        <div class="settings-target">
-          <div>
-            <strong id="settings-tab-name">No tab selected</strong
-            ><span id="settings-tab-domain"></span>
-          </div>
-          <button
-            id="settings-access"
-            class="access-button"
-            role="switch"
-            aria-checked="false"
-            aria-label="Enable selected tab"
-          >
-            <i class="switch-track"></i>
-          </button>
-        </div>
-        <p class="help">Only enabled tabs are available to agents.</p>
+        <p class="help">All web tabs have access by default. Revoke access for any tab below. Chrome-protected pages are unavailable.</p>
+        <div id="settings-tab-list" aria-label="Access for all open web tabs"></div>
       </section>
       <form id="settings-form">
         <section class="settings-section">
@@ -400,6 +386,7 @@
       <button id="close-image" class="secondary">Close</button
       ><img id="large-screenshot" alt="Expanded browser observation" />
     </dialog>
+    <script src="tab-access.js"></script>
     <script src="attention-tone.js"></script>
     <script src="task-view.js"></script>
     <script src="sidepanel.js"></script>

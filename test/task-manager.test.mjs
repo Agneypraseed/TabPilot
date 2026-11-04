@@ -31,18 +31,14 @@ test("stopping coordinator during child persistence cannot launch the new specia
         if (options.targetTabId !== 12) { childCalls++; return complete(options); }
         await options.extraTools.find(tool => tool.name === "delegate_research").invoke(new RunContext(), JSON.stringify({ url: "https://example.com/research", task: "Read source" }));
         return complete(options);
-    }, { browser: async method => method === "tabs" ? [{ id: 12 }] : { tabId: 90, url: "https://example.com/research", enabled: false } });
+    }, { browser: async method => method === "tabs" ? [{ id: 12 }, { id: 90 }] : { tabId: 90, url: "https://example.com/research", enabled: true } });
     const save = ui.manager.store.upsert;
     ui.manager.store.upsert = async record => {
         if (record.role === "research" && record.status === "queued" && !blocked) { blocked = true; await barrier; }
         return save(record);
     };
-    ui.manager.approveResearchTab = async () => {};
     await ui.manager.connected({ scope: ui.scope });
     await ui.create();
-    await until(() => ui.manager.snapshot().requests.length === 1);
-    const request = ui.manager.snapshot().requests[0];
-    await ui.manager.command("human-response", { id: request.id, runId: request.runId, scope: ui.scope, decision: "approve" });
     await until(() => blocked);
     const parent = [...ui.manager.records.values()].find(record => !record.parentTaskId);
     await ui.manager.command("task-cancel", { taskId: parent.id, scope: ui.scope });
@@ -145,8 +141,8 @@ test("rotated tab namespace requires explicit rebind and isolates other browser 
     await ui.manager.close();
 });
 
-test("coordinator creates disabled research tabs, waits for scoped approval and collects real worker results", async () => {
-    const opened = [], grants = [], results = [];
+test("coordinator opens accessible research tabs without approval and collects real worker results", async () => {
+    const opened = [], grants = [], results = [], requests = [];
     const invoke = (options, name, args) => options.extraTools.find(tool => tool.name === name).invoke(new RunContext(), JSON.stringify(args));
     const ui = setup(async (_prompt, options) => {
         if (options.targetTabId !== 12) {
@@ -161,25 +157,50 @@ test("coordinator creates disabled research tabs, waits for scoped approval and 
         for (const workerId of ids) results.push(JSON.parse(await invoke(options, "collect_worker_result", { workerId })));
         return complete(options);
     }, { browser: async (method, _tabId, params) => {
-        if (method === "tabs") return [{ id: 12 }];
+        if (method === "tabs") return [{ id: 12 }, ...opened.map(tab => ({ id: tab.tabId }))];
         assert.equal(method, "open");
-        const result = { tabId: 90 + opened.length, url: params.url, enabled: false };
+        const result = { tabId: 90 + opened.length, url: params.url, enabled: true };
         opened.push(result); return result;
     } });
     ui.manager.approveResearchTab = async input => { grants.push(input); };
+    ui.manager.subscribe(state => requests.push(...state.requests));
     await ui.manager.connected({ scope: ui.scope });
     await ui.create();
-    for (let i = 0; i < 2; i++) {
-        await until(() => ui.manager.snapshot().requests.length === 1);
-        assert.equal(grants.length, i);
-        const request = ui.manager.snapshot().requests[0];
-        assert.match(request.detail, /https:\/\/example.com/);
-        await ui.manager.command("human-response", { id: request.id, runId: request.runId, scope: ui.scope, decision: "approve" });
-    }
     await until(() => !ui.manager.active);
-    assert.equal(grants.length, 2);
+    assert.equal(opened.length, 2);
+    assert.deepEqual(grants, [], "Research must not use the obsolete private grant route");
+    assert.deepEqual(requests, [], "Default tab access must not request human approval");
     assert.equal(results.length, 2);
     assert.ok(results.every(result => result.status === "completed" && result.evidence.includes("Observed")));
     assert.equal([...ui.records.values()].filter(record => record.role === "research").length, 2);
+    await ui.manager.close();
+});
+
+test("a newly revoked research tab cannot start a specialist or restore its own access", async () => {
+    const calls = [], grants = [], requests = [], results = [];
+    let childCalls = 0;
+    const ui = setup(async (_prompt, options) => {
+        if (options.targetTabId !== 12) { childCalls++; return complete(options); }
+        results.push(await options.extraTools.find(tool => tool.name === "delegate_research").invoke(new RunContext(),
+            JSON.stringify({ url: "https://example.com/revoked", task: "Read source" })));
+        return complete(options);
+    }, { browser: async method => {
+        calls.push(method);
+        if (method === "tabs") return [{ id: 12 }];
+        assert.equal(method, "open", "Delegation must never issue an access-restoration command");
+        return { tabId: 90, url: "https://example.com/revoked", enabled: false };
+    } });
+    ui.manager.approveResearchTab = async input => { grants.push(input); };
+    ui.manager.subscribe(state => requests.push(...state.requests));
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create();
+    await until(() => !ui.manager.active);
+    assert.equal(childCalls, 0);
+    assert.equal([...ui.records.values()].filter(record => record.role === "research").length, 0);
+    assert.match(results[0], /revoked|protected/i);
+    assert.deepEqual(grants, []);
+    assert.deepEqual(requests, []);
+    assert.equal(calls.filter(method => method === "open").length, 1);
+    assert.equal(calls.at(-1), "tabs", "Access must be rechecked after opening the tab");
     await ui.manager.close();
 });

@@ -35,10 +35,11 @@ chrome.tabs
     .query({ active: true, currentWindow: true })
     .then(async ([tab]) => {
         if (!Number.isInteger(tab?.id)) throw new Error("No active tab found.");
+        if (!TabPilotTabAccess.supported(tab.url)) throw new Error("Chrome does not allow TabPilot access to this page.");
         const key = `tab:${tab.id}`;
-        const stored = await chrome.storage.session.get(key);
+        const stored = await TabPilotTabAccess.read(chrome, key);
 
-        enabled = stored[key] ?? false;
+        enabled = TabPilotTabAccess.enabled(stored, tab.id);
 
         accessStatus.textContent = enabled ? "Access enabled" : "Access disabled";
         toggleButton.textContent = enabled ? "Disable access" : "Enable access";

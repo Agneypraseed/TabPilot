@@ -1,4 +1,4 @@
-// Extension-only controller. Every Chrome command checks the enabled-tab boundary.
+// Extension-only controller. Every Chrome command checks per-tab revocation.
 class TabPilotBrowser {
     constructor(chromeApi, pageFunction) {
         this.chrome = chromeApi;
@@ -10,11 +10,15 @@ class TabPilotBrowser {
         this.screenshots = new Map();
         this.dialogs = new Map();
         this.visuals = new Map();
-        chromeApi.debugger.onDetach.addListener(source => {
+        this.accessWrites = Promise.resolve();
+        chromeApi.debugger.onDetach.addListener((source, reason) => {
             this.forgetVisual(source.tabId);
-            this.attached.delete(source.tabId);
+            const wasAttached = this.attached.delete(source.tabId);
             this.invalidate(source.tabId);
-            void chromeApi.storage.session.remove(`tab:${source.tabId}`);
+            // Canceling Chrome's debugging banner remains a user stop signal.
+            // Our own detach removes the attachment first and does not re-revoke.
+            if (wasAttached && reason !== "target_closed") void chromeApi.storage.session.set({ [`tab:${source.tabId}`]: false })
+                .then(() => this.persistRevocation(source.tabId, true)).catch(() => {});
         });
         chromeApi.debugger.onEvent.addListener((source, method, params) => {
             if (method === "Page.frameNavigated" || method === "Page.navigatedWithinDocument") { this.invalidate(source.tabId); this.forgetVisual(source.tabId); }
@@ -25,17 +29,35 @@ class TabPilotBrowser {
 
     invalidate(tabId) { this.snapshots.delete(tabId); this.screenshots.delete(tabId); }
 
+    persistRevocation(tabId, revoked) {
+        if (!this.chrome.storage.local) return Promise.resolve();
+        const operation = this.accessWrites.then(async () => {
+            const saved = await this.chrome.storage.local.get("tabAccessRevocations");
+            const ids = new Set(saved.tabAccessRevocations ?? []);
+            if (revoked) ids.add(tabId); else ids.delete(tabId);
+            await this.chrome.storage.local.set({ tabAccessRevocations: [...ids] });
+        });
+        this.accessWrites = operation.catch(() => {});
+        return operation;
+    }
+
+    async clearAccess(tabId) {
+        await this.chrome.storage.session.remove(`tab:${tabId}`);
+        await this.persistRevocation(tabId, false);
+    }
+
     async permitted(tabId) {
         if (!Number.isSafeInteger(tabId) || tabId < 0) throw new Error("Invalid tab ID.");
         const key = `tab:${tabId}`;
-        const stored = await this.chrome.storage.session.get(key);
-        if (stored[key] !== true) throw new Error("Access disabled. Enable this tab before reading or controlling it.");
+        const stored = await TabPilotTabAccess.read(this.chrome, key);
+        if (!TabPilotTabAccess.enabled(stored, tabId)) throw new Error("Access disabled for this tab. Restore access in Settings before reading or controlling it.");
         const tab = await this.chrome.tabs.get(tabId);
         if (!/^https?:\/\//.test(tab.url ?? "")) throw new Error("Open a regular HTTP or HTTPS page before using TabPilot.");
         const url = new URL(tab.url);
         if (url.hostname === "chromewebstore.google.com" || (url.hostname === "chrome.google.com" && url.pathname.startsWith("/webstore"))) {
             throw new Error("Chrome protects its extension store from browser control.");
         }
+        if (!TabPilotTabAccess.enabled(await TabPilotTabAccess.read(this.chrome, key), tabId)) throw new Error("Access disabled for this tab.");
         return tab;
     }
 
@@ -43,14 +65,16 @@ class TabPilotBrowser {
         if (!Number.isSafeInteger(tabId) || tabId < 0 || typeof enabled !== "boolean") throw new Error("Invalid access request.");
         const key = `tab:${tabId}`;
         if (!enabled) {
-            await this.chrome.storage.session.remove(key);
+            await this.chrome.storage.session.set({ [key]: false });
             this.invalidate(tabId);
             await this.detach(tabId);
+            await this.persistRevocation(tabId, true);
             return { enabled: false };
         }
-        await this.chrome.storage.session.set({ [key]: true });
-        try { await this.ensureAttached(tabId); }
-        catch (error) { await this.chrome.storage.session.remove(key); await this.detach(tabId); throw error; }
+        const tab = await this.chrome.tabs.get(tabId);
+        if (!TabPilotTabAccess.supported(tab.url)) throw new Error("Chrome does not allow access to this page.");
+        await this.persistRevocation(tabId, false);
+        await this.chrome.storage.session.remove(key);
         return { enabled: true };
     }
 
@@ -353,10 +377,9 @@ class TabPilotBrowser {
                     options.active = true;
                     created = await this.chrome.tabs.create(options);
                 }
-                // All newly opened tabs start disabled, including agent-created tabs.
-                await this.chrome.storage.session.remove(`tab:${created.id}`);
-                return { action: method, tabId: created.id, url, enabled: false, openedInForeground: options.active,
-                    message: "New tab opened disabled. The user must explicitly enable it before the agent can access it." };
+                const enabled = TabPilotTabAccess.supported(url) && TabPilotTabAccess.enabled(await TabPilotTabAccess.read(this.chrome, `tab:${created.id}`), created.id);
+                return { action: method, tabId: created.id, url, enabled, openedInForeground: options.active,
+                    message: enabled ? "New web tab has access by default. The user can revoke it in Settings." : "This tab is protected or its access was revoked." };
             } else if (method === "close") {
                 await this.permitted(tabId);
                 await this.chrome.storage.session.remove(`tab:${tabId}`);

@@ -20,7 +20,7 @@ try {
     };
     const tabs = await requestBridge("tabs");
     const tab = tabs.find(tab => tab.url === "http://127.0.0.1:4322/");
-    assert.ok(tab, "Enable the practice tab before running this check.");
+    assert.ok(tab, "Open the practice tab and restore its access in Settings if it was revoked.");
     const taskPrompt = `Read this page and report its title without changing anything. Verification ${randomUUID()}.`;
     const notBefore = Date.now() + 60000;
     const initial = await requestTask({ method: "task-create", payload: { tabId: tab.id, tabTitle: tab.title,

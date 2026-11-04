@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 import { backgroundSource, mockDebugger } from "./background-source.mjs";
-const popupSource = await readFile(new URL("../popup.js", import.meta.url), "utf8");
+const popupSource = (await readFile(new URL("../tab-access.js", import.meta.url), "utf8")) + "\n" + await readFile(new URL("../popup.js", import.meta.url), "utf8");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 function background({ url = "https://example.com/", revokeDuringRead = false } = {}) {
@@ -94,7 +94,7 @@ async function popup(stored, tabId, failSave = false) {
     };
     const messages = [];
     const chrome = {
-        tabs: { query: async () => [{ id: tabId }] },
+        tabs: { query: async () => [{ id: tabId, url: "https://example.com/" }] },
         storage: { session: {
             get: async key => ({ [key]: stored[key] }),
             set: async value => {
@@ -106,29 +106,29 @@ async function popup(stored, tabId, failSave = false) {
             messages.push(message);
             if (message.type === "tabpilot:access") {
                 if (failSave) throw new Error("Storage unavailable");
-                if (message.enabled) stored[`tab:${message.tabId}`] = true;
-                else delete stored[`tab:${message.tabId}`];
+                if (message.enabled) delete stored[`tab:${message.tabId}`];
+                else stored[`tab:${message.tabId}`] = false;
                 return { ok: true, enabled: message.enabled };
             }
             return message.type === "tabpilot:bridge-status" ? { connected: false }
                 : { ok: true, snapshot: { title: "Example", text: "<b>page text</b>" } };
         } }
     };
-    vm.runInNewContext(popupSource, { chrome, document: { getElementById: element } });
+    vm.runInNewContext(popupSource, { chrome, URL, document: { getElementById: element } });
     await flush();
     return { element, messages, click: id => element(id).listeners.click() };
 }
 
-test("popup saves per-tab access and restores it after reopening", async () => {
+test("popup defaults to access and preserves per-tab revocation after reopening", async () => {
     const stored = {};
     const first = await popup(stored, 12);
-    assert.equal(first.element("access-status").textContent, "Access disabled");
+    assert.equal(first.element("access-status").textContent, "Access enabled");
     await first.click("toggle-access");
-    assert.equal(stored["tab:12"], true);
+    assert.equal(stored["tab:12"], false);
     const reopened = await popup(stored, 12);
-    assert.equal(reopened.element("access-status").textContent, "Access enabled");
+    assert.equal(reopened.element("access-status").textContent, "Access disabled");
     const otherTab = await popup(stored, 34);
-    assert.equal(otherTab.element("access-status").textContent, "Access disabled");
+    assert.equal(otherTab.element("access-status").textContent, "Access enabled");
     await reopened.click("toggle-access");
     assert.equal(stored["tab:12"], undefined);
 });
@@ -146,7 +146,7 @@ test("popup requests the current tab and displays returned data as text", async 
 test("failed storage writes preserve displayed state and allow retry", async () => {
     const ui = await popup({}, 12, true);
     await ui.click("toggle-access");
-    assert.equal(ui.element("access-status").textContent, "Access disabled");
+    assert.equal(ui.element("access-status").textContent, "Access enabled");
     assert.equal(ui.element("snapshot-output").textContent, "Storage unavailable");
     assert.equal(ui.element("toggle-access").disabled, false);
 });

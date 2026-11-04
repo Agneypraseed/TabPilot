@@ -1,36 +1,43 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import vm from "node:vm";
-import { WebSocket } from "ws";
-import { createBridge } from "../server.mjs";
 import { backgroundSource, mockDebugger } from "./background-source.mjs";
 
-test("research access uses a private paired channel, checks source access and the approved URL", async t => {
-    const token = "b".repeat(64), origin = `chrome-extension://${"b".repeat(32)}`;
-    const bridge = createBridge({ token });
-    await new Promise(resolve => bridge.server.listen(0, "127.0.0.1", resolve));
-    const port = bridge.server.address().port;
-    t.after(() => bridge.close());
-    const stored = { "tab:12": true }, tabs = new Map([[12, { id: 12, url: "https://example.com/" }], [34, { id: 34, url: "https://example.com/research" }]]);
-    const chrome = { runtime: { id: "b".repeat(32), onMessage: { addListener() {} } },
-        tabs: { get: async id => tabs.get(id), onRemoved: { addListener() {} } },
-        storage: { session: { get: async key => key === null ? stored : ({ [key]: stored[key] }), set: async value => Object.assign(stored, value), remove: async key => { delete stored[key]; } } } };
+// Exercise the actual worker policy, without attaching to every listed tab.
+test("all web tabs across windows are available by default; revocations persist and close clears them", async () => {
+    const stored = {}, local = { historyScope: randomUUID() };
+    let removed, startup;
+    const tabs = new Map([[12, { id: 12, windowId: 1, title: "First", url: "https://example.com/" }],
+        [34, { id: 34, windowId: 2, title: "Second", url: "https://other.example/" }],
+        [99, { id: 99, url: "chrome://extensions/" }], [100, { id: 100, url: "https://chromewebstore.google.com/" }]]);
+    let attaches = 0;
+    const chrome = { runtime: { id: "test", onMessage: { addListener() {} }, onStartup: { addListener(fn) { startup = fn; } } },
+        tabs: { query: async filter => { assert.deepEqual(Object.keys(filter), []); return [...tabs.values()]; },
+            get: async id => { if (!tabs.has(id)) throw Error("Tab closed"); return tabs.get(id); }, onRemoved: { addListener(fn) { removed = fn; } } },
+        storage: { session: { get: async key => key === null ? { ...stored } : { [key]: stored[key] }, set: async value => Object.assign(stored, value), remove: async key => { delete stored[key]; } },
+            local: { get: async key => ({ [key]: local[key] }), set: async value => Object.assign(local, value), remove: async key => { delete local[key]; } } } };
     mockDebugger(chrome, async () => ({}));
-    class LocalSocket extends WebSocket {
-        constructor() { super(`ws://127.0.0.1:${port}/extension`, { origin }); }
-    }
-    const context = vm.createContext({ chrome, WebSocket: LocalSocket, URL, crypto: globalThis.crypto, setTimeout, clearTimeout });
-    vm.runInContext(backgroundSource, context);
-    await context.connectBridge(token);
-    await assert.rejects(bridge.approveResearchTab({ tabId: 34, sourceTabId: 12, url: "https://wrong.example/" }), /changed after approval/);
-    assert.equal(stored["tab:34"], undefined);
-    stored["tab:12"] = false;
-    await assert.rejects(bridge.approveResearchTab({ tabId: 34, sourceTabId: 12, url: tabs.get(34).url }), /Access disabled/);
-    stored["tab:12"] = true;
-    await bridge.approveResearchTab({ tabId: 34, sourceTabId: 12, url: tabs.get(34).url });
-    assert.equal(stored["tab:34"], true);
-    const response = await fetch(`http://127.0.0.1:${port}/command`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ method: "approved-research", tabId: 34, params: { sourceTabId: 12, url: tabs.get(34).url } }) });
-    assert.equal(response.status, 400, "CLI/MCP API cannot grant tab access");
+    chrome.debugger.attach = async () => { attaches++; };
+    const worker = () => { const context = vm.createContext({ chrome, URL, crypto: globalThis.crypto }); vm.runInContext(backgroundSource, context); return context; };
+    const first = worker();
+    assert.deepEqual(Array.from(await first.listEnabledTabs(), tab => tab.id), [12, 34]);
+    assert.equal(attaches, 0, "Listing default access must not attach to every tab");
+    await vm.runInContext('browser.setAccess(12, false)', first);
+    assert.equal(stored["tab:12"], false);
+    assert.deepEqual(Array.from(await first.listEnabledTabs(), tab => tab.id), [34]);
+    delete stored["tab:12"]; // Chrome clears session storage on extension reload.
+    const reloaded = worker();
+    assert.deepEqual(Array.from(await reloaded.listEnabledTabs(), tab => tab.id), [34]);
+    await vm.runInContext('browser.setAccess(12, true)', reloaded);
+    assert.deepEqual(Array.from(await reloaded.listEnabledTabs(), tab => tab.id), [12, 34]);
+    await vm.runInContext('browser.setAccess(12, false)', reloaded);
+    tabs.delete(12); removed(12); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stored["tab:12"], undefined);
+    assert.equal(local.tabAccessRevocations.includes(12), false);
+    tabs.set(56, { id: 56, windowId: 2, title: "New", url: "https://new.example/" });
+    assert.deepEqual(Array.from(await reloaded.listEnabledTabs(), tab => tab.id), [34, 56]);
+    await vm.runInContext('browser.setAccess(34, false)', reloaded);
+    delete stored["tab:34"]; startup(); await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(Array.from(await reloaded.listEnabledTabs(), tab => tab.id), [34, 56]);
 });

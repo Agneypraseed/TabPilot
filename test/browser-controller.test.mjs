@@ -3,7 +3,17 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
-const source = await readFile(new URL("../browser-controller.js", import.meta.url), "utf8");
+const source = (await readFile(new URL("../tab-access.js", import.meta.url), "utf8")) + "\n" + await readFile(new URL("../browser-controller.js", import.meta.url), "utf8");
+test("concurrent revocations preserve both tabs and restoring one leaves the other blocked", async () => {
+    const { browser, chrome } = controllerFixture();
+    const local = {};
+    chrome.storage.local = { get: async key => ({ [key]: structuredClone(local[key]) }), set: async value => { await Promise.resolve(); Object.assign(local, value); } };
+    await Promise.all([browser.setAccess(12, false), browser.setAccess(34, false)]);
+    assert.deepEqual([...local.tabAccessRevocations].sort((a,b) => a-b), [12, 34]);
+    await browser.setAccess(12, true);
+    await browser.permitted(12);
+    await assert.rejects(browser.permitted(34), /Access disabled/);
+});
 export function controllerFixture() {
     const stored = {}, calls = [], handlers = {};
     const chrome = {
@@ -45,23 +55,26 @@ export function controllerFixture() {
     return { browser: new Browser(chrome, () => {}), chrome, stored, calls, handlers };
 }
 
-test("disabled tabs cannot attach and explicit enable/disable controls the debugger", async () => {
+test("web tabs default to access, attach lazily, and explicit revocation blocks control", async () => {
     const { browser, calls, stored } = controllerFixture();
-    await assert.rejects(browser.snapshot(12), /Access disabled/);
+    await browser.permitted(12);
     assert.equal(calls.length, 0);
+    await browser.setAccess(12, false);
+    await assert.rejects(browser.snapshot(12), /Access disabled/);
     await browser.setAccess(12, true);
-    assert.equal(stored["tab:12"], true);
+    assert.equal(stored["tab:12"], undefined);
+    assert.equal(calls.filter(call => call.method === "attach").length, 0);
     const simultaneous = await Promise.allSettled([browser.snapshot(12), browser.snapshot(12)]);
     assert.equal(simultaneous.filter(result => result.status === "fulfilled").length, 1);
     assert.match(simultaneous.find(result => result.status === "rejected").reason.message, /TAB_BUSY/);
     assert.equal(calls.filter(call => call.method === "attach").length, 1);
     await browser.setAccess(12, false);
-    assert.equal(stored["tab:12"], undefined);
+    assert.equal(stored["tab:12"], false);
     assert.equal(calls.filter(call => call.method === "detach").length, 1);
     await assert.rejects(browser.snapshot(12), /Access disabled/);
 });
 
-test("embedded foreground-only tab creation falls back once and keeps access disabled", async () => {
+test("embedded foreground-only tab creation falls back once and keeps default access", async () => {
     const { browser, chrome, stored } = controllerFixture();
     await browser.setAccess(12, true);
     const attempts = [];
@@ -74,7 +87,7 @@ test("embedded foreground-only tab creation falls back once and keeps access dis
     assert.deepEqual(attempts.map(item => item.active), [false, true]);
     assert.equal(attempts[1].windowId, 1);
     assert.equal(result.openedInForeground, true);
-    assert.equal(result.enabled, false);
+    assert.equal(result.enabled, true);
     assert.equal(stored["tab:34"], undefined);
     attempts.length = 0;
     chrome.tabs.create = async options => { attempts.push(options); throw new Error("General failure; outcome unknown"); };
@@ -164,11 +177,11 @@ test("detach revokes permission and navigation invalidates old references", asyn
     handlers.event({ tabId: 12 }, "Page.frameNavigated", {});
     assert.equal(browser.snapshots.has(12), false);
     handlers.detach({ tabId: 12 });
-    assert.equal(stored["tab:12"], undefined);
+    assert.equal(stored["tab:12"], false);
     await assert.rejects(browser.snapshot(12), /Access disabled/);
 });
 
-test("navigation/history stay within web pages and newly created tabs start disabled", async () => {
+test("navigation/history stay within web pages and newly created tabs have access by default", async () => {
     const { browser, stored, calls } = controllerFixture();
     await browser.setAccess(12, true);
     await assert.rejects(browser.action(12, "navigate", { url: "javascript:alert(1)" }), /cannot be controlled/);
@@ -179,9 +192,9 @@ test("navigation/history stay within web pages and newly created tabs start disa
     assert.deepEqual(calls.filter(call => call.method === "Page.navigateToHistoryEntry").map(call => call.params.entryId), [1, 3]);
     const created = await browser.action(12, "open", { url: "https://example.com/new" });
     assert.equal(created.tabId, 34);
-    assert.equal(created.enabled, false);
+    assert.equal(created.enabled, true);
     assert.equal(stored["tab:34"], undefined);
-    await assert.rejects(browser.snapshot(34), /Access disabled/);
+    await browser.snapshot(34);
     await browser.action(12, "close");
     assert.equal(stored["tab:12"], undefined);
     assert.ok(calls.some(call => call.method === "remove" && call.id === 12));
@@ -189,6 +202,7 @@ test("navigation/history stay within web pages and newly created tabs start disa
 
 test("screenshots are bound to enabled tabs and stale coordinates are rejected", async () => {
     const { browser, calls, handlers } = controllerFixture();
+    await browser.setAccess(12, false);
     await assert.rejects(browser.screenshot(12), /Access disabled/);
     await browser.setAccess(12, true);
     const screenshot = await browser.screenshot(12);

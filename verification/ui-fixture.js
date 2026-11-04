@@ -3,7 +3,8 @@
     let listener;
     const event = { addListener() {} };
     const state = { revision: 1, status: "idle", runId: null, events: [], historyAvailable: true, historyRevision: 1, settings: { provider: "meta", model: "muse-spark-1.3", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }, { id: "openai", configured: true }] };
-    let connected = true, enabled = true;
+    let connected = true;
+    const access = {};
     if (new URLSearchParams(location.search).has("tasks")) {
         state.jobs = [
             { id: "coordinator", tabId: 12, prompt: "Compare delivery options", role: "coordinator", status: "waiting-for-worker", stage: 2, maxStages: 20, createdAt: 3, activity: "Waiting for research findings" },
@@ -18,11 +19,11 @@
             requests: [{ id: "preview-request", runId: "preview-run", kind: "information", question: "Which city should I research?", detail: "I’ll wait for your answer before continuing.", tabId: 12 }] });
     }
     globalThis.chrome = {
-        tabs: { query: async () => [{ id: 12, title: "Google", url: "https://www.google.com/", active: true }], onActivated: event, onUpdated: event, onRemoved: event },
-        storage: { session: { get: async () => ({ "tab:12": enabled }) }, onChanged: event },
+        tabs: { query: async () => [{ id: 12, windowId: 1, title: "Google", url: "https://www.google.com/", active: true }, ...(new URLSearchParams(location.search).has("tabs") ? [{ id: 34, windowId: 2, title: "Delivery policy", url: "http://127.0.0.1:4322/delivery" }, { id: 56, windowId: 2, title: "Returns policy", url: "http://127.0.0.1:4322/returns" }] : [])], update: async () => ({}), onActivated: event, onUpdated: event, onRemoved: event },
+        storage: { session: { get: async () => ({ ...access }) }, onChanged: event },
         runtime: { onMessage: { addListener(fn) { listener = fn; } }, sendMessage: async message => {
             if (message.type === "tabpilot:ui-state") return { connected, agent: state };
-            if (message.type === "tabpilot:access") { enabled = message.enabled; return { ok: true, enabled }; }
+            if (message.type === "tabpilot:access") { if (message.enabled) delete access[`tab:${message.tabId}`]; else access[`tab:${message.tabId}`] = false; return { ok: true, enabled: message.enabled }; }
             if (message.type === "tabpilot:connect") { connected = true; return { ok: true }; }
             if (message.type === "tabpilot:disconnect") { connected = false; return { ok: true }; }
             if (message.type === "tabpilot:test-alert") return { ok: true, played: false };

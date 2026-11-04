@@ -1,6 +1,6 @@
 # TabPilot
 
-A local browser-control toolkit that lets any tool-capable LLM agent inspect and operate explicitly enabled tabs in your existing Chrome browser.
+A local toolkit that lets tool-capable LLM agents inspect and operate web tabs in your existing Chrome browser, with per-tab access controls.
 
 TabPilot connects an agent to your existing browser through a Chrome extension, a local CLI, and MCP tools. Give the included agent a task in the browser side panel, watch its activity, and steer or pause it as it works. Coding agents can use the same browser controls through CLI or MCP.
 
@@ -23,7 +23,7 @@ npm run cli -- pair
 
 Click TabPilot's toolbar icon to open the agent UI. The **↗ layout chooser** offers **Open beside page in Chrome** or **Open separate workspace**. The latter uses a window, or a tab in browsers without extension windows. Open **Settings**, paste the displayed pairing token, and click **Connect**. Treat this token as a local credential. The bridge listens only on `127.0.0.1:4311`; its generated configuration stays in the ignored `.tabpilot` folder. Restarting the server creates a new token, so pair again afterward. Reloading the extension also requires reconnecting.
 
-Open an HTTP or HTTPS website, click TabPilot, and enable access for that tab. List enabled tabs and use an ID from the result:
+Open an HTTP or HTTPS website. Web tabs have access by default, including newly opened tabs. List accessible tabs and use an ID from the result:
 
 ```powershell
 npm run cli -- tabs
@@ -43,7 +43,7 @@ npm run cli -- help
 
 Screenshots are saved under the ignored `.tabpilot/screenshots` directory unless a new output filename is supplied. Coordinates for pointer actions use pixels in the returned image; screenshots expire for control after 30 seconds and are invalidated by page or viewport changes.
 
-Only explicitly enabled tabs can be read or controlled. Access follows that tab through ordinary HTTP/HTTPS navigation. Disable access to detach the debugger and stop further operations. Closing a tab removes its access state. All new tabs, including ones opened by an agent, start disabled and require the user to enable them. Tab access controls work without the server.
+Web tabs have access by default across all Chrome windows. In **Settings > Tab access**, use **Revoke** to block a specific tab and **Restore** to allow it again. The target selector's switch controls the selected tab too. Revocations survive popup closure, worker suspension, and extension reloads until the tab closes; a fresh browser session starts with default access. Revocation detaches the debugger and blocks further reading/control. Chrome-protected pages, extension pages, and the Chrome Web Store remain unavailable. Tab access controls work without the server. The debugger attaches only when an operation needs it, not to every listed tab.
 
 The bridge serves one connected extension at a time and rejects overlapping work on the same tab. Leave it running while using the side panel, CLI, or MCP; reconnect through Settings if disconnected. Page data stays local until an agent/client chooses to send it to a model.
 
@@ -57,7 +57,7 @@ Text entry is paced: short values appear character by character, while longer va
 
 Add your provider key to ignored `.env.local` (see `.env.example`) and restart the bridge to load it. API keys stay on the local bridge. In Settings, choose the provider, model ID, and run limits, then save. The configured provider and model appear below the task composer. These panel preferences are stored in ignored `.tabpilot/agent-settings.json`; they do not change CLI flags or `.env.local`.
 
-Select a web tab and enable access, then describe your task:
+Select a web tab, then describe your task:
 
 - **Browser agent** uses page controls and requests screenshots when useful.
 - **Computer use** brings the selected tab into view and returns fresh screenshot observations to the model and panel after operations. Watch the real page alongside its activity trail; expand the latest observation for a closer look.
@@ -82,7 +82,7 @@ npm run cli -- task-cancel TASK_UUID
 
 The optional delay is in seconds. Scheduled tasks use the workspace model settings and can incur provider API usage; they remain visible in Tasks. External task controls cannot answer approval cards.
 
-With research enabled, the coordinator can open a separate tab and request approval for a research specialist to access that exact page. New tabs remain disabled until you approve. Chrome opens research tabs in the background; hosts that require foreground tabs bring the new page into view. Specialists work independently in their assigned tabs; the coordinator waits for their actual findings before combining them. Waiting for a specialist spends no model tokens. **Stop** on a coordinator also stops its unfinished specialists; it cannot undo dispatched actions or close their tabs. Pause affects the selected agent. Research workers share the configured model and retain their own History.
+With research enabled, the coordinator can open a separate web tab and start a specialist without a tab-access prompt. It checks access again before launch and never restores a user-revoked tab. Chrome opens research tabs in the background; hosts that require foreground tabs bring the new page into view. Specialists work independently in their assigned tabs; the coordinator waits for their actual findings before combining them. Waiting for a specialist spends no model tokens. **Stop** on a coordinator also stops its unfinished specialists; it cannot undo dispatched actions or close their tabs. Pause affects the selected agent. Research workers share the configured model and retain their own History.
 
 ## Downloads
 
@@ -111,7 +111,7 @@ Use the actual ID returned by the download command. Status and cancellation requ
 
 Workspace agents can pause with a request for approval, a missing detail, or a manual browser handoff. Respond in the attention card to continue the same task. CAPTCHA and login handoffs are performed by you in the browser; **Done, continue** tells the agent to inspect the page again, rather than perform the old action. **Decline** rejects the request, and **Stop** cancels the waiting run.
 
-In Settings, choose **Important actions** or **Every action**. Important actions include recognized consequential button labels, Enter, coordinate clicks/drags, tab closing, and downloads. This is a practical action gate, not a universal classifier of website intent. The agent can ask for help whenever it cannot proceed. One approval permits one proposed action; it does not grant access to other tabs. Waiting for a reply pauses the active execution budget.
+In Settings, choose **Important actions** or **Every action**. Important actions include recognized consequential button labels, Enter, coordinate clicks/drags, tab closing, and downloads. This is a practical action gate, not a universal classifier of website intent. The agent can ask for help whenever it cannot proceed. One approval permits one proposed action; it never restores a user-revoked tab. Waiting for a reply pauses the active execution budget.
 
 Optional sound alerts, toolbar badges, and desktop notifications draw attention to waiting tasks. Use **Test sound** in Settings. Desktop notifications and background sound depend on browser support and operating-system settings; the workspace attention card remains available in limited embedded browsers. Notifications use generic text rather than private task details. Requests and responses are saved in that tab's History.
 
@@ -144,12 +144,12 @@ Keep the local bridge running and the extension paired as above. Configure your 
 
 Replace the path with your checkout location. The client launches the MCP process and communicates over stdin/stdout; it does not launch the bridge or pair Chrome automatically. No token needs to be placed in the MCP configuration: each tool call reads the current local bridge configuration.
 
-- `browser_tabs` returns `{ "tabs": [...] }` for explicitly enabled tabs.
+- `browser_tabs` returns `{ "tabs": [...] }` for accessible web tabs across windows, excluding revoked and Chrome-protected tabs.
 - `browser_snapshot` accepts `{ "tabId": 123 }` and returns a fresh snapshot. Disabled tabs and unavailable bridge connections return tool errors.
 - `browser_click`, `browser_hover`, `browser_fill`, and `browser_select` use a current element `ref`.
 - `browser_press`, `browser_scroll`, and `browser_wait` handle keyboard input, scrolling, and asynchronous page changes.
 - `browser_navigate`, `browser_back`, `browser_forward`, `browser_reload`, and `browser_focus` operate on enabled tabs.
-- `browser_open` creates a disabled tab; `browser_close` closes an enabled tab.
+- `browser_open` creates a web tab with access by default; `browser_close` closes an enabled tab.
 - `browser_screenshot` returns an actual image plus metadata. `browser_pointer` clicks, hovers, or drags using that image's `screenshotId` and pixel coordinates.
 - `browser_dialog` handles a native JavaScript dialog when the browser exposes one.
 - `browser_download`, `browser_download_status`, and `browser_download_cancel` use Chrome downloads. `browser_download_local`, `browser_download_local_status`, and `browser_download_local_cancel` explicitly save public page links through the local bridge into the configured folder.
@@ -158,7 +158,7 @@ Website content is untrusted data. An agent should not treat instructions found 
 
 ## Run the browser agent
 
-The included agent uses the OpenAI Agents SDK to choose TabPilot MCP tools and perform browser tasks. Keep the bridge running, pair the extension, and enable a task-relevant tab first.
+The included agent uses the OpenAI Agents SDK to choose TabPilot MCP tools and perform browser tasks. Keep the bridge running, pair the extension, and choose a task-relevant web tab first.
 
 Create an ignored `.env.local` file using `.env.example`. By default the agent uses OpenAI and `gpt-6-luna`. Set `AGENT_PROVIDER`, `AGENT_MODEL`, and the matching key to select another provider. The model must support tool calling. Then run:
 
@@ -187,7 +187,7 @@ The bridge and MCP tools remain usable with other agents. Gemini, Claude, and co
 npm test
 ```
 
-For a live test, run `npm run practice`, open `http://127.0.0.1:4322/` in Chrome, and explicitly enable that tab. With `META_API_KEY` in `.env.local`, run:
+For a live test, run `npm run practice`, open `http://127.0.0.1:4322/` in Chrome, and leave that tab accessible in Settings. With `META_API_KEY` in `.env.local`, run:
 
 ```powershell
 npm run verify:meta
@@ -204,4 +204,4 @@ Screenshots capture tab content, not browser chrome or operating-system dialogs.
 For architecture and the feature-by-feature commit map, see [the learning guide](docs/learning-map.md).
 
 
-For the scheduled-task and public local-download acceptance check, keep the paired practice tab enabled and run `node verification/live-workspace.mjs`. It schedules one real task one minute ahead, checks that no stage starts early, verifies completion and its archived tool result, and compares saved report bytes with the practice source. This uses the workspace model and can incur API usage; it writes a local verification report under `.tabpilot/verification/`.
+For the scheduled-task and public local-download acceptance check, keep the paired practice tab accessible and run `node verification/live-workspace.mjs`. It schedules one real task one minute ahead, checks that no stage starts early, verifies completion and its archived tool result, and compares saved report bytes with the practice source. This uses the workspace model and can incur API usage; it writes a local verification report under `.tabpilot/verification/`.

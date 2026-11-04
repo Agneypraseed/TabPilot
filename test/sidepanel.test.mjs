@@ -5,7 +5,7 @@ import vm from "node:vm";
 import { parseHTML } from "linkedom";
 
 const html = await readFile(new URL("../sidepanel.html", import.meta.url), "utf8");
-const source = await readFile(new URL("../sidepanel.js", import.meta.url), "utf8");
+const source = (await readFile(new URL("../tab-access.js", import.meta.url), "utf8")) + "\n" + await readFile(new URL("../sidepanel.js", import.meta.url), "utf8");
 const tasksSource = await readFile(new URL("../task-view.js", import.meta.url), "utf8");
 const flush = () => new Promise(resolve => setImmediate(resolve));
 test("Tasks keeps workers with their parent tab, safely renders prompts, and submits schedule controls", async () => {
@@ -36,7 +36,7 @@ test("Tasks keeps workers with their parent tab, safely renders prompts, and sub
     assert.equal(payload.allowResearch, false);
     assert.equal($("schedule-prompt").value, "");
 });
-async function panel() {
+async function panel({ initialActiveTab = 12 } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom implements selected options but not HTMLSelectElement.value's setter.
     for (const select of document.querySelectorAll("select")) Object.defineProperty(select, "value", {
@@ -44,16 +44,16 @@ async function panel() {
         set(value) { for (const option of this.querySelectorAll("option")) option.toggleAttribute("selected", option.value === String(value)); }
     });
     let runtimeListener;
-    const stored = {}, calls = [];
+    const stored = {}, calls = [], queries = [];
     const agent = { revision: 1, status: "idle", runId: "run-1", events: [], historyAvailable: true, historyRevision: 0, settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
     const event = { addListener() {} };
     const chrome = {
-        tabs: { query: async () => [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 7, title: "Other tab", url: "https://other.example/" }], create: async args => calls.push({ createdTab: args }), onActivated: event, onUpdated: event, onRemoved: event },
+        tabs: { query: async query => { queries.push(query); const available = [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 8, title: "Other tab", url: "https://other.example/" }]; return query.active ? available.filter(tab => tab.id === initialActiveTab) : available; }, create: async args => calls.push({ createdTab: args }), onActivated: event, onUpdated: event, onRemoved: event },
         storage: { session: { get: async () => stored }, onChanged: event },
         runtime: { getURL: path => `chrome-extension://test/${path}`, onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
             calls.push(message);
             if (message.type === "tabpilot:ui-state") return { connected: true, agent };
-            if (message.type === "tabpilot:access") { stored[`tab:${message.tabId}`] = message.enabled; return { ok: true, enabled: message.enabled }; }
+            if (message.type === "tabpilot:access") { if (message.enabled) delete stored[`tab:${message.tabId}`]; else stored[`tab:${message.tabId}`] = false; return { ok: true, enabled: message.enabled }; }
             if (message.type === "tabpilot:agent") {
                 if (message.method === "history-list") return { ok: true, history: { runs: message.payload.tabId === 12 ? [{ runId: "history-1", task: "Find <img src=x>", source: "workspace", model: "fixture", status: "completed", startedAt: 1 }] : [], nextOffset: null } };
                 if (message.method === "history-events") return { ok: true, history: { events: [{ kind: "assistant", text: "Found the page", time: 1 }, { kind: "tool", tool: "click", phase: "complete", time: 1, result: { clicked: true } }], nextOffset: null } };
@@ -66,12 +66,14 @@ async function panel() {
     vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
-    return { document, calls, dispatch, agent, chrome, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
+    return { document, calls, queries, dispatch, agent, chrome, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
 }
 
-test("side panel enables selected tab, submits task with mode and renders untrusted text safely", async () => {
+test("side panel defaults to access, supports revocation, submits task with mode and renders untrusted text safely", async () => {
     const ui = await panel();
     const $ = id => ui.document.getElementById(id);
+    assert.equal($("send").disabled, false);
+    await ui.dispatch("access-toggle");
     assert.equal($("send").disabled, true);
     await ui.dispatch("access-toggle");
     assert.equal($("send").disabled, false);
@@ -197,4 +199,28 @@ test("attention card keeps a draft reply across updates and resumes only through
     assert.equal(response.decision, "answer");
     assert.equal(response.text, "Space exhibit");
     assert.equal($("attention-requests").hidden, true);
+});
+
+test("Settings lists all windows and revokes a specific tab without changing the selected tab", async () => {
+    const ui = await panel();
+    const $ = id => ui.document.getElementById(id);
+    assert.ok(ui.queries.some(query => Object.keys(query).length === 0));
+    await ui.dispatch("settings-button");
+    const list = $("settings-tab-list");
+    assert.equal(list.querySelectorAll(".tab-access-row").length, 2);
+    assert.equal(list.querySelector("b"), null, "Tab titles are plain text");
+    const other = [...list.querySelectorAll("button")].find(button => button.getAttribute("aria-label") === "Revoke access: Other tab");
+    other.click(); await flush(); await flush();
+    assert.equal($("target-tab").value, "12");
+    assert.equal($("access-toggle").getAttribute("aria-checked"), "true");
+    assert.ok([...list.querySelectorAll("button")].some(button => button.getAttribute("aria-label") === "Restore access: Other tab"));
+    const restore = [...list.querySelectorAll("button")].find(button => button.getAttribute("aria-label") === "Restore access: Other tab");
+    restore.click(); await flush(); await flush();
+    assert.ok([...list.querySelectorAll("button")].some(button => button.getAttribute("aria-label") === "Revoke access: Other tab"));
+});
+
+test("all-window chooser still starts on the current window's active tab", async () => {
+    const ui = await panel({ initialActiveTab: 34 });
+    assert.equal(ui.document.getElementById("target-tab").value, "34");
+    assert.equal(ui.document.getElementById("target-tab").querySelectorAll("option").length, 2);
 });

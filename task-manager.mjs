@@ -193,7 +193,7 @@ export class TaskManager {
         const session = this.createSession({ ...this.serviceOptions, settings: this.preferences.settings,
             sessionId: this.sessionId, manageTraceStore: false,
             runnerOptions: service => ({ continueOnLimit: true, extraTools: [finish, ...this.coordinatorTools(record, service)], taskInstructions: "This is a persistent scheduled task. Use request_user_help for missing information or blockers. When the requested result is verified, call complete_task with evidence before your final answer. Do not claim completion from a plan or from reaching a turn limit. " +
-                (record.role === "research" ? "You are a research specialist. Read sources in your assigned tab and report relevant evidence and source URLs. Do not submit forms or make account changes unless the assigned task explicitly requires them. " : "For research needing another page, delegate_research opens a separate disabled tab, asks the user for access, and starts a specialist. You can start independent specialists, then collect_worker_result before synthesizing. Do not invent worker results. ") }),
+                (record.role === "research" ? "You are a research specialist. Read sources in your assigned tab and report relevant evidence and source URLs. Do not submit forms or make account changes unless the assigned task explicitly requires them. " : "For research needing another page, delegate_research opens a separate web tab with access by default and starts a specialist; respect any per-tab revocation. You can start independent specialists, then collect_worker_result before synthesizing. Do not invent worker results. ") }),
             onCheckpoint: async result => { record.checkpoint = checkpointHistory(result.history ?? []); await this.save(record); } });
         for (const [id, previous] of this.sessions) if (!previous.active && previous.state.tabId === record.tabId) {
             if (!record.resumedFrom && previous.state.status === "completed") {
@@ -228,7 +228,7 @@ export class TaskManager {
     }
     coordinatorTools(record, session) {
         if (record.role === "research" || !record.allowResearch) return [];
-        return [tool({ name: "delegate_research", description: "Open a new disabled research tab and request user approval for access, then start an independent research specialist. Returns a worker task ID. Collect its actual result before citing it.",
+        return [tool({ name: "delegate_research", description: "Open a new web tab and start an independent research specialist. Web tabs have access by default; never override a user revocation. Returns a worker task ID. Collect its actual result before citing it.",
             parameters: z.object({ url: z.string().url().max(4000), task: z.string().min(1).max(10000) }).strict(), errorFunction: null,
             execute: async ({ url, task }) => {
                 await session.checkpoint(); session.controller.signal.throwIfAborted();
@@ -240,12 +240,10 @@ export class TaskManager {
                 try {
                 const opened = await this.browser("open", record.tabId, { url: parsed.href, active: false });
                 session.controller.signal.throwIfAborted();
-                const approval = await session.requestHuman({ kind: "approval", question: "Allow a research specialist to access this new tab?",
-                    detail: `${opened.url}\nResearch task: ${task}\nThe new tab is disabled until you approve. Access can be revoked in TabPilot.` });
-                if (approval.decision !== "approve") return "Research access declined. The new tab remains disabled. Do not retry this request.";
                 await session.checkpoint(); session.controller.signal.throwIfAborted();
-                await this.approveResearchTab({ tabId: opened.tabId, sourceTabId: record.tabId, url: opened.url });
-                session.controller.signal.throwIfAborted();
+                const available = await this.browser("tabs");
+                if (!(Array.isArray(available) ? available : available.tabs).some(tab => tab.id === opened.tabId))
+                    return "Access to the new research tab was revoked or the page is protected. Do not restore access yourself; ask the user for help in Settings.";
                 const worker = await this.create({ ...this.input(record), tabId: opened.tabId, tabTitle: "Research specialist", prompt: task,
                     mode: "browser", notBefore: this.now(), repeatEveryMs: null, allowResearch: false, maxStages: Math.min(record.maxStages, 10) }, { parentTaskId: record.id, role: "research" });
                 if (session.controller.signal.aborted) {

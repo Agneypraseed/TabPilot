@@ -22,7 +22,7 @@ export function createTabPilotMcp({ request = (method, tabId, params) => request
     };
 
     server.registerTool("browser_tabs", {
-        description: "List explicitly enabled Chrome tabs. The local bridge must be running and paired.",
+        description: "List accessible Chrome web tabs across windows. Web tabs have access by default unless revoked in Settings. The local bridge must be running and paired.",
         inputSchema: {},
         outputSchema: { tabs: z.array(z.object({ id: z.number().int().nonnegative(), title: z.string(), url: z.string() })) },
         annotations
