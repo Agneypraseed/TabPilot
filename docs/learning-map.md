@@ -76,6 +76,8 @@ Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The u
 
 `agent-service.mjs` records workspace tasks, guidance, status changes, results, and errors. Its MCP subprocess carries a run ID, allowing `server.mjs` to attach browser requests/results to the correct workspace task. The same authenticated HTTP boundary also records external CLI/MCP calls. It does not record authorization headers or model internals; typed text arguments are omitted, and configured secrets are redacted. `sidepanel.js` displays only the selected tab's history and ignores stale responses after switching tabs.
 
+Live verification used the user-operated workspace with Meta `muse-spark-1.3` and a read-only practice-page task. A separate disk read confirmed the task, tool request/result, final response, model, and completed status. A real CLI screenshot and real MCP stdio snapshot created separately labeled entries for the same tab; the archived screenshot bytes matched the CLI image exactly. Another tab ID returned no matching runs. Local fixture browser checks validate layout; user-operated extension checks and independent saved-file inspection validate the live path. History records new activity; it cannot reconstruct work performed before recording was added.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.
