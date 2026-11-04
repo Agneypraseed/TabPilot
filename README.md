@@ -66,6 +66,14 @@ Select a web tab and enable access, then describe your task:
 
 Panel runs stay restricted to their selected tab. Closing the panel does not stop the local runtime; reopening restores its current state. Live conversation context resets when the bridge restarts; saved History remains available. Screenshots sent in Computer use mode increase model usage and require a model that accepts images. CLI and MCP remain available independently; avoid directing multiple agents at the same tab at once.
 
+## Approvals and requests for help
+
+Workspace agents can pause with a request for approval, a missing detail, or a manual browser handoff. Respond in the attention card to continue the same task. CAPTCHA and login handoffs are performed by you in the browser; **Done, continue** tells the agent to inspect the page again, rather than perform the old action. **Decline** rejects the request, and **Stop** cancels the waiting run.
+
+In Settings, choose **Important actions** or **Every action**. Important actions include recognized consequential button labels, Enter, coordinate clicks/drags, tab closing, and downloads. This is a practical action gate, not a universal classifier of website intent. The agent can ask for help whenever it cannot proceed. One approval permits one proposed action; it does not grant access to other tabs. Waiting for a reply pauses the active execution budget.
+
+Optional sound alerts, toolbar badges, and desktop notifications draw attention to waiting tasks. Use **Test sound** in Settings. Desktop notifications and background sound depend on browser support and operating-system settings; the workspace attention card remains available in limited embedded browsers. Notifications use generic text rather than private task details. Requests and responses are saved in that tab's History.
+
 ## Tab history
 
 Choose a browser tab, then open **History** beside **Agent**. It shows only that tab's recorded activity, newest first:

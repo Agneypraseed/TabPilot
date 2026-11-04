@@ -90,6 +90,13 @@
       </p>
     </section>
     <p id="notice" role="status" hidden></p>
+    <section
+      id="attention-requests"
+      class="attention-requests"
+      aria-live="polite"
+      aria-label="Requests needing your attention"
+      hidden
+    ></section>
     <section id="agent-view" class="agent-view">
       <div class="target-row">
         <div class="target-select">
@@ -282,6 +289,30 @@
       </section>
       <form id="settings-form">
         <section class="settings-section">
+          <h3>Approvals and alerts</h3>
+          <label for="approval-mode">Ask before browser actions</label>
+          <select id="approval-mode">
+            <option value="important">Important actions</option>
+            <option value="every-action">Every action</option>
+          </select>
+          <p class="help">
+            Important actions include recognized submissions, Enter, coordinate
+            clicks, closing tabs, and downloads. The agent can also pause to ask
+            for help or missing information.
+          </p>
+          <label class="check-label"
+            ><input id="sound-alerts" type="checkbox" checked /> Sound when a
+            task needs me</label
+          >
+          <button id="test-alert" class="secondary" type="button">
+            Test sound
+          </button>
+          <p class="help">
+            Native notifications and background audio depend on browser support.
+            A waiting task always appears in the workspace.
+          </p>
+        </section>
+        <section class="settings-section">
           <h3>Model</h3>
           <label for="provider">Provider</label
           ><select id="provider">
@@ -334,6 +365,7 @@
       <button id="close-image" class="secondary">Close</button
       ><img id="large-screenshot" alt="Expanded browser observation" />
     </dialog>
+    <script src="attention-tone.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

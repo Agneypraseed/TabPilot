@@ -25,7 +25,88 @@
     historyReload = false,
     historyRevision = -1;
   const active = () =>
-    ["running", "pausing", "paused", "stopping"].includes(agent?.status);
+    ["running", "pausing", "paused", "needs-input", "stopping"].includes(
+      agent?.status,
+    );
+  const attentionCards = new Map();
+  function renderAttention(requests = []) {
+    const ids = new Set(requests.map((request) => request.id));
+    for (const [id, card] of attentionCards)
+      if (!ids.has(id)) {
+        card.remove();
+        attentionCards.delete(id);
+      }
+    for (const pending of requests) {
+      if (attentionCards.has(pending.id)) continue;
+      const card = document.createElement("article");
+      card.className = "attention-card";
+      const title = document.createElement("h3");
+      title.textContent =
+        pending.kind === "approval"
+          ? "Approve an action"
+          : pending.kind === "handoff"
+            ? "Your help is needed"
+            : "The agent has a question";
+      const question = document.createElement("p");
+      question.textContent = pending.question;
+      const detail = document.createElement("p");
+      detail.className = "help";
+      detail.textContent = pending.detail || "";
+      card.append(title, question, detail);
+      let input;
+      if (pending.kind === "information") {
+        input = document.createElement("textarea");
+        input.maxLength = 12000;
+        input.placeholder = "Your reply";
+        input.setAttribute("aria-label", "Reply to agent");
+        card.append(input);
+      }
+      const actions = document.createElement("div");
+      actions.className = "attention-actions";
+      const decisions =
+        pending.kind === "approval"
+          ? [
+              ["approve", "Approve once"],
+              ["deny", "Decline"],
+            ]
+          : pending.kind === "handoff"
+            ? [
+                ["done", "Done, continue"],
+                ["deny", "Cannot continue"],
+              ]
+            : [
+                ["answer", "Send reply"],
+                ["deny", "Decline"],
+              ];
+      for (const [decision, label] of decisions) {
+        const button = document.createElement("button");
+        button.textContent = label;
+        if (decision !== "deny") button.className = "primary";
+        button.addEventListener("click", async () => {
+          const buttons = [...actions.querySelectorAll("button")];
+          for (const item of buttons) item.disabled = true;
+          try {
+            await command("human-response", {
+              id: pending.id,
+              runId: pending.runId,
+              decision,
+              ...(input ? { text: input.value } : {}),
+            });
+            notice("");
+          } catch (error) {
+            notice(error.message);
+          } finally {
+            for (const item of buttons) item.disabled = false;
+          }
+        });
+        actions.append(button);
+      }
+      card.append(actions);
+      $("attention-requests").append(card);
+      attentionCards.set(pending.id, card);
+    }
+    $("attention-requests").hidden = !requests.length;
+  }
   const labels = {
     browser_tabs: "Finding your tab",
     browser_snapshot: "Reading the page",
@@ -156,12 +237,22 @@
     } else {
       const label = document.createElement("strong");
       label.textContent =
-        { user: "You", assistant: "Agent", status: "Status", error: "Error" }[
-          event.kind
-        ] || "Activity";
+        {
+          user: "You",
+          assistant: "Agent",
+          attention: "Needs attention",
+          status: "Status",
+          error: "Error",
+        }[event.kind] || "Activity";
       const text = document.createElement("p");
       text.textContent = event.text || "";
       row.append(label, text);
+      if (event.detail) {
+        const detail = document.createElement("p");
+        detail.className = "help";
+        detail.textContent = event.detail;
+        row.append(detail);
+      }
     }
     const images = new Map();
     function collect(value) {
@@ -265,6 +356,8 @@
     $("provider").value = s.provider;
     $("model").value = s.model;
     $("max-turns").value = s.maxTurns;
+    $("approval-mode").value = s.approvalMode || "important";
+    $("sound-alerts").checked = s.soundAlerts !== false;
     if (
       ![...$("timeout").options].some(
         (option) => Number(option.value) === s.timeoutMs,
@@ -374,12 +467,13 @@
         running: "Working…",
         pausing: "Pausing after this operation…",
         paused: "Paused · you have control",
+        "needs-input": "Waiting for your reply",
         stopping: "Stopping…",
       }[agent?.status] || "";
     $("pause").textContent = ["paused", "pausing"].includes(agent?.status)
       ? "▶ Resume"
       : "Ⅱ Pause";
-    $("pause").disabled = agent?.status === "stopping";
+    $("pause").disabled = ["stopping", "needs-input"].includes(agent?.status);
     $("stop").disabled = agent?.status === "stopping";
     $("new-chat").disabled = active();
     $("send").disabled =
@@ -387,7 +481,7 @@
       !connected ||
       !agent ||
       !selected?.enabled ||
-      agent?.status === "stopping";
+      ["stopping", "needs-input"].includes(agent?.status);
     $("send").setAttribute(
       "aria-label",
       active() ? "Send guidance" : "Send task",
@@ -401,11 +495,13 @@
         ? "Restart the bridge to enable the agent interface."
         : !selected?.enabled
           ? "Enable access on this tab to start."
-          : active()
-            ? "New guidance applies before the next action. Enter to send."
-            : mode === "computer"
-              ? "Watch it work in your tab. Pause any time."
-              : "Only tabs you enable are shared.";
+          : agent?.status === "needs-input"
+            ? "Answer the request above to continue."
+            : active()
+              ? "New guidance applies before the next action. Enter to send."
+              : mode === "computer"
+                ? "Watch it work in your tab. Pause any time."
+                : "Only tabs you enable are shared.";
     $("save-settings").disabled = !connected || !agent || active();
     if (agent?.settings) {
       $("model-label").replaceChildren(
@@ -482,6 +578,7 @@
     fillSettings();
     renderControls();
     renderMessages();
+    renderAttention(state.requests);
     if (state.historyRevision !== historyRevision) {
       historyRevision = state.historyRevision;
       if (workspaceView === "history") refreshHistory();
@@ -493,6 +590,7 @@
     if (state.agent) receive(state.agent);
     else {
       agent = null;
+      renderAttention([]);
       renderControls();
     }
   }
@@ -606,6 +704,7 @@
       await request("tabpilot:disconnect");
       connected = false;
       agent = null;
+      renderAttention([]);
       renderControls();
       notice("Bridge disconnected. Any active run is stopping.");
     } catch (error) {
@@ -628,6 +727,8 @@
         model: $("model").value.trim(),
         maxTurns: Number($("max-turns").value),
         timeoutMs: Number($("timeout").value),
+        approvalMode: $("approval-mode").value,
+        soundAlerts: $("sound-alerts").checked,
       });
       settingsDirty = false;
       fillSettings();
@@ -643,6 +744,7 @@
     busy = true;
     renderControls();
     try {
+      await globalThis.tabPilotAttentionTone?.({ unlockOnly: true });
       notice("");
       if (active())
         await command("steer", { runId: agent.runId, text: prompt });
@@ -690,6 +792,22 @@
       notice(error.message);
     }
   });
+  $("test-alert").addEventListener("click", async () => {
+    try {
+      await globalThis.tabPilotAttentionTone?.({ unlockOnly: true });
+      const response = await request("tabpilot:test-alert");
+      const played =
+        response.played || (await globalThis.tabPilotAttentionTone?.());
+      notice(
+        played
+          ? "Attention sound played."
+          : "Audio is unavailable in this browser. Waiting tasks still appear in the workspace.",
+        !!played,
+      );
+    } catch (error) {
+      notice(error.message);
+    }
+  });
   $("new-chat").addEventListener("click", async () => {
     try {
       await command("clear");
@@ -716,6 +834,11 @@
   });
   $("close-image").addEventListener("click", () => $("image-dialog").close());
   chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "tabpilot:attention-alert") {
+      if (!message.played && agent?.settings.soundAlerts !== false)
+        void globalThis.tabPilotAttentionTone?.();
+      return;
+    }
     if (message.type === "tabpilot:history-event") {
       if (agent) agent.historyRevision = message.revision;
       historyRevision = message.revision;

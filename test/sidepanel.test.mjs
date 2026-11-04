@@ -143,3 +143,29 @@ test("late history replies cannot show a previous tab's records after switching 
     assert.equal($("history-content").textContent, "");
     assert.equal($("history-tab-label").textContent, "Other tab");
 });
+
+test("attention card keeps a draft reply across updates and resumes only through its matching request", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    const waiting = { ...ui.agent, revision: 2, status: "needs-input", tabId: 12, mode: "browser", requests: [{ id: "request-one", runId: "run-1", kind: "information", question: "Which topic? <img src=x>", detail: "A choice is needed" }] };
+    ui.receive(waiting);
+    assert.equal($("send").disabled, true);
+    const input = $("attention-requests").querySelector("textarea"); input.value = "Space exhibit";
+    ui.receive({ ...waiting, revision: 3 });
+    assert.equal($("attention-requests").querySelector("textarea").value, "Space exhibit");
+    assert.equal($("attention-requests").querySelector("img"), null);
+    const send = ui.chrome.runtime.sendMessage;
+    let response;
+    ui.chrome.runtime.sendMessage = async message => {
+        if (message.method === "human-response") {
+            response = message.payload;
+            return { ok: true, state: { ...waiting, revision: 4, status: "running", requests: [] } };
+        }
+        return send(message);
+    };
+    $("attention-requests").querySelector("button").click(); await flush();
+    assert.equal(response.id, "request-one");
+    assert.equal(response.runId, "run-1");
+    assert.equal(response.decision, "answer");
+    assert.equal(response.text, "Space exhibit");
+    assert.equal($("attention-requests").hidden, true);
+});

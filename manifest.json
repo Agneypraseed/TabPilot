@@ -13,7 +13,9 @@
     "storage",
     "debugger",
     "tabs",
-    "sidePanel"
+    "sidePanel",
+    "notifications",
+    "offscreen"
   ],
   "host_permissions": ["http://127.0.0.1/*"],
   "background": {

@@ -160,7 +160,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                         client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: "Restart the bridge to enable the agent interface." }));
                         return;
                     }
-                    const payload = ["start", "history-list", "history-events", "history-image"].includes(message.method)
+                    const payload = ["start", "human-response", "history-list", "history-events", "history-image"].includes(message.method)
                         ? { ...message.payload, scope: extensionScope } : message.payload;
                     Promise.resolve().then(() => agentService.command(message.method, payload)).then(
                         result => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: true,

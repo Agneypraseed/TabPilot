@@ -1,7 +1,9 @@
 importScripts("page-runtime.js");
 importScripts("browser-controller.js");
+importScripts("attention-alerts.js");
 
 const browser = new TabPilotBrowser(chrome, tabPilotPage);
+const attentionAlerts = new TabPilotAttentionAlerts(chrome);
 
 let bridgeSocket = null;
 let bridgeReady = false;
@@ -34,7 +36,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access", "tabpilot:agent", "tabpilot:ui-state", "tabpilot:disconnect"].includes(message?.type)) return false;
+    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access", "tabpilot:agent", "tabpilot:ui-state", "tabpilot:disconnect", "tabpilot:test-alert"].includes(message?.type)) return false;
 
     // Only our extension pages can request snapshots through this handler.
     const ownExtensionPage = typeof sender.url === "string" && sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
@@ -56,7 +58,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         return false;
     }
-    const operation = message.type === "tabpilot:access"
+    const operation = message.type === "tabpilot:test-alert"
+        ? attentionAlerts.sound().then(played => ({ ok: true, played }))
+        : message.type === "tabpilot:access"
         ? browser.setAccess(message.tabId, message.enabled).then(result => ({ ok: true, ...result }))
         : message.type === "tabpilot:agent"
         ? requestAgent(message.method, message.payload)
@@ -85,6 +89,7 @@ function requestAgent(method, payload = {}) {
 function publishAgentState(state) {
     if (agentState && state?.sessionId === agentState.sessionId && state?.revision < agentState.revision) return;
     agentState = state;
+    void attentionAlerts.update(state).catch(() => {});
     // No panel may be open; losing a UI observer is not a runtime error.
     chrome.runtime.sendMessage?.({ type: "tabpilot:agent-event", state }).catch(() => {});
 }

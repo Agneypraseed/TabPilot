@@ -3,11 +3,13 @@ import { z } from "zod";
 import { runBrowserAgent } from "./agent.mjs";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
 import { historyQuery } from "./trace-history.mjs";
+import { HumanRequests, ActiveRunBudget } from "./human-requests.mjs";
 
 const providers = { openai: "OPENAI_API_KEY", meta: "META_API_KEY", gemini: "GOOGLE_GENERATIVE_AI_API_KEY", claude: "ANTHROPIC_API_KEY", "openai-compatible": "COMPATIBLE_API_KEY" };
 const settingsSchema = z.object({
     provider: z.enum(Object.keys(providers)), model: z.string().trim().min(1).max(150),
-    maxTurns: z.number().int().min(1).max(100), timeoutMs: z.number().int().min(1000).max(900000)
+    maxTurns: z.number().int().min(1).max(100), timeoutMs: z.number().int().min(1000).max(900000),
+    approvalMode: z.enum(["important", "every-action"]).default("important"), soundAlerts: z.boolean().default(true)
 }).strict();
 const startSchema = z.object({ prompt: z.string().trim().min(1).max(12000),
     tabId: z.number().int().nonnegative(), mode: z.enum(["browser", "computer"]), scope: z.string().uuid().optional(), tabTitle: z.string().max(500).optional() }).strict();
@@ -31,12 +33,13 @@ export class AgentService {
         }; }
         this.revision = 0;
         this.history = [];
+        this.humanRequests = new HumanRequests({ onChange: () => this.emit() });
         this.conversationTab = null;
         this.state = { status: "idle", runId: null, events: [], screenshot: null };
     }
-    get active() { return ["running", "pausing", "paused", "stopping"].includes(this.state.status); }
+    get active() { return ["running", "pausing", "paused", "needs-input", "stopping"].includes(this.state.status); }
     snapshot() {
-        return { ...this.state, historyRevision: this.traceStore?.revision ?? 0, historyAvailable: !!this.traceStore, historyWarning: this.historyWarning, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
+        return { ...this.state, requests: this.humanRequests.list(), historyRevision: this.traceStore?.revision ?? 0, historyAvailable: !!this.traceStore, historyWarning: this.historyWarning, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
     }
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
     subscribeHistory(listener) { this.historyListeners.add(listener); return () => this.historyListeners.delete(listener); }
@@ -52,20 +55,41 @@ export class AgentService {
         this.historyWarning = `History could not be saved: ${formatAgentError(error, this.env)}`;
         this.emit();
     }
+    async requestHuman(request) {
+        this.controller.signal.throwIfAborted();
+        if (["pausing", "paused"].includes(this.state.status)) this.pauseAfterInput = true;
+        this.budget?.suspend();
+        this.state.status = "needs-input";
+        this.event("attention", request.question, { requestKind: request.kind, detail: request.detail });
+        try {
+            const response = await this.humanRequests.request(request, {
+                signal: this.controller.signal, runId: this.state.runId, tabId: this.state.tabId, scope: this.traceContext?.scope ?? this.runScope
+            });
+            this.state.status = this.pauseAfterInput ? "pausing" : "running";
+            this.event("user", response.decision === "answer" ? response.text : `User response: ${response.decision}`, { responseKind: request.kind });
+            return response;
+        } finally { this.budget?.resume(); }
+    }
     async checkpoint() {
         this.controller.signal.throwIfAborted();
         if (this.state.status === "pausing") { this.state.status = "paused"; this.emit(); }
         if (this.state.status === "paused") {
+            this.budget?.suspend();
             await new Promise((resolve, reject) => {
                 const abort = () => { this.wake = null; reject(this.controller.signal.reason); };
                 this.wake = () => { this.controller.signal.removeEventListener("abort", abort); this.wake = null; resolve(); };
                 this.controller.signal.addEventListener("abort", abort, { once: true });
             });
+            this.budget?.resume();
         }
         this.controller.signal.throwIfAborted();
     }
     async command(method, payload = {}) {
         if (method === "state") return this.snapshot();
+        if (method === "human-response") {
+            this.humanRequests.respond(payload);
+            return this.snapshot();
+        }
         if (["history-list", "history-events", "history-image"].includes(method)) {
             const query = historyQuery.parse(payload);
             if (!this.traceStore) throw new Error("Restart the bridge to enable History.");
@@ -97,6 +121,8 @@ export class AgentService {
             if (this.conversationTab !== input.tabId) { this.history = []; this.state.events = []; }
             this.conversationTab = input.tabId;
             this.controller = new AbortController();
+            this.runScope = input.scope;
+            this.pauseAfterInput = false;
             this.steering = [];
             this.state = { ...this.state, status: "running", runId: randomUUID(), tabId: input.tabId, mode: input.mode, screenshot: null };
             this.traceContext = this.traceStore && input.scope ? { scope: input.scope, tabId: input.tabId, runId: this.state.runId } : null;
@@ -117,9 +143,11 @@ export class AgentService {
             this.steering.push(text);
             this.event("user", text, { queued: true });
         } else if (method === "pause") {
+            if (this.state.status === "needs-input") this.pauseAfterInput = true;
             if (this.state.status === "running") this.state.status = "pausing";
             this.event("status", "Pause requested");
         } else if (method === "resume") {
+            this.pauseAfterInput = false;
             if (["paused", "pausing"].includes(this.state.status)) { this.state.status = "running"; this.wake?.(); this.event("status", "Run resumed"); }
         } else if (method === "stop") {
             this.state.status = "stopping";
@@ -131,7 +159,8 @@ export class AgentService {
     async execute(input) {
         let configured;
         const traceContext = this.traceContext;
-        const timer = setTimeout(() => this.controller.abort(new Error("Run time limit reached.")), this.settings.timeoutMs);
+        const controller = this.controller;
+        const budget = this.budget = new ActiveRunBudget(this.settings.timeoutMs, () => controller.abort(new Error("Run active-time limit reached.")));
         try {
             await this.traceReady;
             configured = await this.configureModel({ ...this.env, AGENT_PROVIDER: this.settings.provider, AGENT_MODEL: this.settings.model });
@@ -140,6 +169,7 @@ export class AgentService {
                 model: configured.model, modelSettings: configured.modelSettings, targetTabId: input.tabId, mode: input.mode,
                 maxTurns: this.settings.maxTurns, signal: this.controller.signal, history: this.history,
                 traceContext,
+                requestHuman: request => this.requestHuman(request), approvalMode: this.settings.approvalMode,
                 checkpoint: () => this.checkpoint(), hasSteering: () => this.steering.length > 0,
                 getSteering: () => {
                     const messages = this.steering.splice(0);
@@ -162,7 +192,7 @@ export class AgentService {
             this.event(this.state.status === "error" ? "error" : "status", formatAgentError(this.controller.signal.reason ?? error, this.env));
         } finally {
             const finalStatus = this.state.status;
-            clearTimeout(timer);
+            budget.stop();
             try { await configured?.close(); } catch { /* Runtime outcome already reported. */ }
             if (traceContext) await this.traceStore.finish(traceContext, finalStatus).catch(error => this.traceFailure(error));
             this.emit();

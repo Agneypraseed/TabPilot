@@ -78,6 +78,12 @@ Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The u
 
 Live verification used the user-operated workspace with Meta `muse-spark-1.3` and a read-only practice-page task. A separate disk read confirmed the task, tool request/result, final response, model, and completed status. A real CLI screenshot and real MCP stdio snapshot created separately labeled entries for the same tab; the archived screenshot bytes matched the CLI image exactly. Another tab ID returned no matching runs. Local fixture browser checks validate layout; user-operated extension checks and independent saved-file inspection validate the live path. History records new activity; it cannot reconstruct work performed before recording was added.
 
+## Human collaboration
+
+`human-requests.mjs` owns pending requests and the active-time budget. Requests are scoped to a run and browser namespace, expire, and are consumed only once. A CAPTCHA handoff accepts manual completion, not approval for the agent to solve it. Abort cancels pending waits. `agent-interactions.mjs` exposes the SDK help tool and gates important or every proposed action before the MCP request can reach Chrome. The active budget pauses during user input and ordinary pauses.
+
+`attention-alerts.js` maintains one notification per request and a pending-count badge, with generic desktop text. `attention-tone.js` provides a local two-note sound; `attention-audio.html` is the optional offscreen playback document. The workspace falls back to its own unlocked AudioContext if an embedded host lacks offscreen support. UI cards preserve a draft across state updates and use the exact request/run IDs when responding. History stores the request and reply.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.

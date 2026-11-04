@@ -176,3 +176,29 @@ test("Stop aborts a paused SDK run without dispatching the pending browser actio
     assert.equal(browserActions, 0);
     assert.equal(service.history.length, 0);
 });
+
+test("SDK human-help tool waits for a real reply then resumes the same task", { timeout: 15000 }, async () => {
+    let turns = 0;
+    const model = {
+        async getResponse(request) {
+            if (++turns === 1) return call("request_user_help", { kind: "information", question: "Which exhibit should I inspect?", detail: "Choose a topic." }, turns);
+            assert.match(JSON.stringify(request.input), /Space exhibit/);
+            return { usage: new Usage({ requests: 1 }), output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "I will inspect the Space exhibit." }] }] };
+        }, async *getStreamedResponse() {}
+    };
+    const service = new AgentService({ env: { OPENAI_API_KEY: "fixture", AGENT_MODEL: "fixture" },
+        configure: async () => ({ model, close: async () => {} }),
+        run: (prompt, options) => runBrowserAgent(prompt, { ...options, server: fixtureServer() }) });
+    const waiting = new Promise(resolve => {
+        const unsubscribe = service.subscribe(state => { if (state.requests.length) { unsubscribe(); resolve(state.requests[0]); } });
+    });
+    await service.command("start", { prompt: "Inspect an exhibit", tabId: 12, mode: "browser" });
+    const request = await waiting;
+    assert.equal(service.state.status, "needs-input");
+    assert.equal(turns, 1);
+    await service.command("human-response", { id: request.id, runId: request.runId, decision: "answer", text: "Space exhibit" });
+    await service.running;
+    assert.equal(service.state.status, "completed");
+    assert.equal(service.humanRequests.list().length, 0);
+    assert.match(JSON.stringify(service.history), /Space exhibit/);
+});

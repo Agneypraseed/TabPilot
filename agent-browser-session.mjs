@@ -2,7 +2,8 @@
 // CLI/MCP callers that do not opt in keep their existing behavior.
 export function observedBrowserServer(server, {
     signal, targetTabId, mode = "browser", checkpoint = async () => {},
-    hasSteering = () => false, onActivity = () => {}, onObservation = () => {}
+    hasSteering = () => false, onActivity = () => {}, onObservation = () => {},
+    beforeTool = async () => {}, afterTool = () => {}
 } = {}) {
     const execute = async (name, args, meta, options) => {
         await checkpoint();
@@ -11,8 +12,13 @@ export function observedBrowserServer(server, {
         if (targetTabId !== undefined && name !== "browser_tabs" && args?.tabId !== targetTabId) {
             return { isError: true, content: [{ type: "text", text: "This run is restricted to the user-selected tab." }] };
         }
+        const decision = await beforeTool(name, args);
+        await checkpoint(); signal?.throwIfAborted();
+        if (decision) return decision;
+        if (hasSteering()) return { isError: true, content: [{ type: "text", text: "The user sent new guidance while this action was waiting. Reconsider it before acting." }] };
         onActivity({ tool: name, phase: "running" });
         const result = await server.callToolResult(name, args, meta, { ...options, signal });
+        await afterTool(name, args, result);
         if (name === "browser_tabs" && targetTabId !== undefined && result.structuredContent?.tabs) {
             const tabs = result.structuredContent.tabs.filter(tab => tab.id === targetTabId);
             result.structuredContent = { tabs };

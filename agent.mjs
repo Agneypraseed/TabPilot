@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
 import { parseAgentArguments, agentUsage } from "./agent-options.mjs";
 import { observedBrowserServer } from "./agent-browser-session.mjs";
+import { humanHelpTool, browserApprovalPolicy } from "./agent-interactions.mjs";
 
 export async function runBrowserAgent(prompt, {
     model = DEFAULT_OPENAI_MODEL,
@@ -22,7 +23,10 @@ export async function runBrowserAgent(prompt, {
     hasSteering = () => false,
     onActivity = () => {},
     onObservation = () => {},
-    history = []
+    history = [],
+    requestHuman,
+    approvalMode = "important",
+    extraTools = []
 } = {}) {
     server ??= new MCPServerStdio({
         name: "TabPilot",
@@ -45,7 +49,9 @@ export async function runBrowserAgent(prompt, {
         if (targetTabId !== undefined && !available.structuredContent.tabs.some(tab => tab.id === targetTabId)) {
             throw new Error("Enable access on the selected tab before starting a task.");
         }
-        const observed = observedBrowserServer(server, { signal, targetTabId, mode, checkpoint, hasSteering, onActivity, onObservation });
+        const policy = requestHuman ? browserApprovalPolicy({ requestHuman, mode: approvalMode }) : {};
+        const observed = observedBrowserServer(server, { signal, targetTabId, mode, checkpoint, hasSteering, onActivity, onObservation,
+            beforeTool: policy.beforeTool, afterTool: policy.afterTool });
         if (mode === "computer" && targetTabId !== undefined) {
             await observed.callToolResult("browser_focus", { tabId: targetTabId });
         }
@@ -55,6 +61,7 @@ export async function runBrowserAgent(prompt, {
             model,
             instructions: (targetTabId !== undefined ? `Work only in selected tab ${targetTabId}. ` : "") +
                 (mode === "computer" ? "Computer use mode: inspect the screenshot observations after actions. Keep the controlled tab visible. " : "") +
+                (requestHuman ? "When you need missing information or cannot proceed, call request_user_help instead of ending the task with a question. Use handoff for CAPTCHAs, login, and native dialogs; let the user handle them in the browser. Never collect passwords, API keys, or one-time login codes in chat. Re-observe after the user's reply. Important proposed browser actions are gated by an explicit UI approval. " : "") +
                 "Complete the user's task in explicitly enabled browser tabs. " +
                 "Use browser_tabs to discover tab IDs; never invent IDs. Plan a short sequence, act, inspect the returned state, and revise when needed. " +
                 "Start with browser_snapshot. Prefer semantic element refs for clicks, filling fields, and selection. " +
@@ -73,6 +80,7 @@ export async function runBrowserAgent(prompt, {
                 "Verify the requested outcome in tool results before reporting success. Report failures, incomplete work, and truncation honestly. " +
                 "Give a concise final answer describing the observed result.",
             mcpServers: [observed],
+            tools: [...(requestHuman ? [humanHelpTool(requestHuman)] : []), ...extraTools],
             modelSettings
         });
         const runner = new Runner({ tracingDisabled: true, modelSettings: { parallelToolCalls: false } });

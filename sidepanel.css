@@ -30,6 +30,58 @@
   text-align: left;
   font-size: 12px;
 }
+.attention-requests {
+  margin: 14px 20px 0;
+  max-height: 45vh;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.attention-card {
+  background: #fffaf0;
+  border: 1px solid #e9d3a5;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+.attention-card h3 {
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+.attention-card p {
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.attention-card .help {
+  font-size: 11px;
+  margin-top: 7px;
+}
+.attention-card textarea {
+  width: 100%;
+  min-height: 68px;
+  padding: 10px;
+  margin-top: 10px;
+  resize: vertical;
+  background: white;
+}
+.attention-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.attention-actions button {
+  font-size: 12px;
+}
+.check-label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 16px 0;
+}
+.check-label input {
+  width: 16px;
+  min-height: 16px;
+}
 * {
   box-sizing: border-box;
 }
@@ -403,7 +455,10 @@ h3 {
   color: var(--muted);
   font-size: 10px;
 }
-.history-event > strong { display:block; margin-top:5px; }
+.history-event > strong {
+  display: block;
+  margin-top: 5px;
+}
 .history-event summary {
   cursor: pointer;
   list-style-position: inside;
