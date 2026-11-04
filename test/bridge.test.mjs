@@ -138,6 +138,34 @@ test("bridge archives workspace and external activity without crossing tab or br
     assert.equal(history.history.runs[0].tabId, 12);
 });
 
+test("authenticated UI can answer only the matching pending human request", async t => {
+    const scope = randomUUID();
+    const service = new AgentService({ env: { OPENAI_API_KEY: "fixture", AGENT_MODEL: "fixture" },
+        configure: async () => ({ model: {}, close: async () => {} }),
+        run: async (_prompt, options) => {
+            const reply = await options.requestHuman({ kind: "information", question: "Which topic?" });
+            return { answer: `Selected ${reply.text}` };
+        } });
+    const api = await setup(t, { agentService: service });
+    const extension = await pair(api.port, token, scope);
+    const send = (id, payload) => new Promise(resolve => {
+        const listener = raw => { const message = JSON.parse(raw); if (message.type === "agent-response" && message.id === id) { extension.off("message", listener); resolve(message); } };
+        extension.on("message", listener);
+        extension.send(JSON.stringify({ type: "agent-request", id, method: "human-response", payload }));
+    });
+    await service.command("start", { scope, prompt: "Research", tabId: 12, mode: "browser" });
+    while (!service.humanRequests.list().length) await new Promise(resolve => setImmediate(resolve));
+    const pending = service.humanRequests.list()[0];
+    const invalid = await send("wrong", { id: pending.id, runId: randomUUID(), decision: "answer", text: "Space" });
+    assert.equal(invalid.ok, false);
+    assert.equal(service.state.status, "needs-input");
+    const valid = await send("right", { id: pending.id, runId: pending.runId, scope: randomUUID(), decision: "answer", text: "Space" });
+    assert.equal(valid.ok, true);
+    await service.running;
+    assert.equal(service.state.status, "completed");
+    assert.equal(service.state.events.at(-1).text, "Selected Space");
+});
+
 test("local API rejects bad tokens, browser origins, and rebound hosts", async (t) => {
     const api = await setup(t);
     assert.equal((await api.request("/tabs", { Authorization: "Bearer wrong" })).status, 401);

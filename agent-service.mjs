@@ -15,7 +15,8 @@ const startSchema = z.object({ prompt: z.string().trim().min(1).max(12000),
     tabId: z.number().int().nonnegative(), mode: z.enum(["browser", "computer"]), scope: z.string().uuid().optional(), tabTitle: z.string().max(500).optional() }).strict();
 
 export class AgentService {
-    constructor({ env = process.env, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel, traceStore } = {}) {
+    constructor({ env = process.env, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel, traceStore,
+        sessionId, manageTraceStore = true, runnerOptions = {}, onCheckpoint = async () => {} } = {}) {
         this.env = { ...env };
         this.settings = settingsSchema.parse(settings ?? {
             provider: env.AGENT_PROVIDER || "openai", model: env.AGENT_MODEL || DEFAULT_OPENAI_MODEL,
@@ -25,10 +26,12 @@ export class AgentService {
         this.runAgent = run;
         this.configureModel = configure;
         this.listeners = new Set();
-        this.sessionId = randomUUID();
+        this.sessionId = sessionId ?? randomUUID();
+        this.runnerOptions = runnerOptions;
+        this.onCheckpoint = onCheckpoint;
         this.traceStore = traceStore;
         this.historyListeners = new Set();
-        if (traceStore) { traceStore.bridgeSessionId = this.sessionId; traceStore.onChange = () => {
+        if (traceStore && manageTraceStore) { traceStore.bridgeSessionId = this.sessionId; traceStore.onChange = () => {
             for (const listener of this.historyListeners) listener(traceStore.revision);
         }; }
         this.revision = 0;
@@ -37,7 +40,17 @@ export class AgentService {
         this.conversationTab = null;
         this.state = { status: "idle", runId: null, events: [], screenshot: null };
     }
-    get active() { return ["running", "pausing", "paused", "needs-input", "stopping"].includes(this.state.status); }
+    get active() { return ["running", "pausing", "paused", "needs-input", "waiting-for-worker", "stopping"].includes(this.state.status); }
+    async waitForWorker(operation) {
+        this.budget?.suspend();
+        this.state.status = "waiting-for-worker";
+        this.emit();
+        try { return await operation(); }
+        finally {
+            if (!this.controller.signal.aborted) { this.state.status = "running"; this.emit(); }
+            this.budget?.resume();
+        }
+    }
     snapshot() {
         return { ...this.state, requests: this.humanRequests.list(), historyRevision: this.traceStore?.revision ?? 0, historyAvailable: !!this.traceStore, historyWarning: this.historyWarning, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
     }
@@ -165,7 +178,9 @@ export class AgentService {
             await this.traceReady;
             configured = await this.configureModel({ ...this.env, AGENT_PROVIDER: this.settings.provider, AGENT_MODEL: this.settings.model });
             this.controller.signal.throwIfAborted();
+            const options = typeof this.runnerOptions === "function" ? this.runnerOptions(this) : this.runnerOptions;
             const result = await this.runAgent(input.prompt, {
+                ...options,
                 model: configured.model, modelSettings: configured.modelSettings, targetTabId: input.tabId, mode: input.mode,
                 maxTurns: this.settings.maxTurns, signal: this.controller.signal, history: this.history,
                 traceContext,
@@ -181,6 +196,8 @@ export class AgentService {
             });
             this.controller.signal.throwIfAborted();
             this.history = result.history ?? [];
+            await this.onCheckpoint(result);
+            this.lastResult = result;
             this.state.status = "completed";
             this.event("assistant", result.answer);
             if (this.steering.length) this.event("status", "The run finished before reading your last guidance. Send it as a new task.");

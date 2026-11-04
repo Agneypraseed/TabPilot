@@ -1,4 +1,13 @@
 import test from "node:test";
+test("download approval identifies exact URL and location and status does not ask again", async () => {
+    const requests = [];
+    const policy = browserApprovalPolicy({ requestHuman: async request => { requests.push(request); return { decision: "approve" }; } });
+    await policy.beforeTool("browser_download", { tabId: 12, url: "https://example.com/report.pdf", filename: "research/report.pdf", saveAs: false });
+    assert.match(requests[0].detail, /https:\/\/example.com\/report.pdf/);
+    assert.match(requests[0].detail, /Downloads\/research\/report.pdf/);
+    await policy.beforeTool("browser_download_status", { tabId: 12, downloadId: 9 });
+    assert.equal(requests.length, 1);
+});
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { HumanRequests, ActiveRunBudget } from "../human-requests.mjs";

@@ -48,6 +48,7 @@ export function browserApprovalPolicy({ requestHuman, mode = "important" }) {
         "browser_wait",
         "browser_focus",
         "browser_hover",
+        "browser_download_status",
       ].includes(name);
       if (read) return;
       const target = targets.get(args?.tabId)?.get(args?.ref);
@@ -72,7 +73,7 @@ export function browserApprovalPolicy({ requestHuman, mode = "important" }) {
         kind: "approval",
         question: `Allow the agent to ${description}?`,
         detail:
-          "This approves this one proposed action. You can decline and give the agent another direction.",
+          name === "browser_download" ? `URL: ${args.url}\nDestination: ${args.saveAs ? "Choose a location in Chrome's Save As dialog" : `Downloads/${args.filename || "(filename from the server)"}`}\nThis starts one download. Chrome may ask you to choose a location; handle that dialog in the browser. The agent cannot accept dangerous-download warnings or open the file.` : "This approves this one proposed action. You can decline and give the agent another direction.",
       });
       if (result.decision !== "approve")
         return {

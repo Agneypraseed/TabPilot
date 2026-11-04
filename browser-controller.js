@@ -340,8 +340,9 @@ class TabPilotBrowser {
                 await this.waitDocument(tabId, params);
             } else if (method === "open") {
                 const url = this.httpUrl(params.url);
-                await this.permitted(tabId);
-                const created = await this.chrome.tabs.create({ url, active: params.active === true });
+                const source = await this.permitted(tabId);
+                const created = await this.chrome.tabs.create({ url, active: params.active === true,
+                    ...(Number.isSafeInteger(source.windowId) ? { windowId: source.windowId } : {}) });
                 // All newly opened tabs start disabled, including agent-created tabs.
                 await this.chrome.storage.session.remove(`tab:${created.id}`);
                 return { action: method, tabId: created.id, url, enabled: false,

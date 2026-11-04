@@ -9,6 +9,9 @@ import { WebSocket, WebSocketServer } from "ws";
 import { parseBrowserCommand } from "./commands.mjs";
 import { AgentService } from "./agent-service.mjs";
 import { TraceHistory } from "./trace-history.mjs";
+import { TaskManager } from "./task-manager.mjs";
+import { TaskStore } from "./task-store.mjs";
+import { requestBridge } from "./bridge-client.mjs";
 
 const historyId = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
@@ -91,7 +94,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
         let trace = null, external = false;
         if (traceStore && Number.isSafeInteger(command.tabId)) {
             try {
-                const workspace = agentService.traceContext;
+                const workspace = agentService.traceContextFor?.(request.headers["x-tabpilot-run"], command.tabId, extensionScope) ?? agentService.traceContext;
                 if (agentService.active && workspace && request.headers["x-tabpilot-run"] === workspace.runId &&
                     command.tabId === workspace.tabId && extensionScope === workspace.scope) trace = workspace;
                 else {
@@ -151,6 +154,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                     authenticated = true;
                     extension = client;
                     extensionScope = historyId(message.historyScope) ? message.historyScope : extensionScope;
+                    void agentService?.connected?.({ scope: extensionScope, profileId: historyId(message.profileId) ? message.profileId : undefined })?.catch(error => agentService.traceFailure(error));
                     client.send(JSON.stringify({ type: "ready" }));
                     if (agentService) client.send(JSON.stringify({ type: "agent-state", state: agentService.snapshot() }));
                     return;
@@ -160,7 +164,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                         client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: "Restart the bridge to enable the agent interface." }));
                         return;
                     }
-                    const payload = ["start", "human-response", "history-list", "history-events", "history-image"].includes(message.method)
+                    const payload = ["start", "task-create", "task-resume", "task-cancel", "select-tab", "human-response", "history-list", "history-events", "history-image"].includes(message.method)
                         ? { ...message.payload, scope: extensionScope } : message.payload;
                     Promise.resolve().then(() => agentService.command(message.method, payload)).then(
                         result => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: true,
@@ -174,6 +178,11 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                 if (!entry) return;
                 pending.delete(message.id);
                 clearTimeout(entry.timer);
+                if (entry.internal) {
+                    if (message.ok === true) entry.resolve(message.data);
+                    else entry.reject(new Error(String(message.error ?? "Research tab permission failed.")));
+                    return;
+                }
                 void finishTrace(entry, message.ok === true, message.ok === true ? message.data : { error: String(message.error ?? "Extension request failed.") }).catch(historyFailure);
                 reply(entry.response, message.ok === true ? 200 : 409,
                     message.ok === true
@@ -187,6 +196,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                 extension = null;
                 agentService?.disconnect();
                 for (const entry of pending.values()) {
+                    if (entry.internal) { clearTimeout(entry.timer); entry.reject(new Error("Extension disconnected.")); continue; }
                     const { response, timer } = entry;
                     clearTimeout(timer);
                     void finishTrace(entry, false, { error: "Extension disconnected; action outcome unknown." }).catch(historyFailure);
@@ -206,10 +216,20 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
 
     return {
         server,
+        approveResearchTab({ tabId, sourceTabId, url }) {
+            if (extension?.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Extension disconnected."));
+            const id = randomUUID();
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => { pending.delete(id); reject(new Error("Research permission timed out. Check the tab before retrying.")); }, timeoutMs);
+                pending.set(id, { internal: true, resolve, reject, timer });
+                extension.send(JSON.stringify({ type: "request", id, method: "approved-research", tabId, params: { sourceTabId, url } }));
+            });
+        },
         async close() {
             unsubscribe?.();
             unsubscribeHistory?.();
             agentService?.disconnect();
+            await agentService?.close?.();
             clearInterval(heartbeat);
             for (const client of sockets) client.terminate();
             await new Promise((done) => server.close(done));
@@ -227,10 +247,12 @@ async function main() {
     catch (error) { if (error.code !== "ENOENT") throw new Error("Invalid local agent settings. Check .tabpilot/agent-settings.json."); }
     const token = randomBytes(32).toString("hex");
     const traceStore = new TraceHistory(fileURLToPath(new URL(".tabpilot/history/", import.meta.url)), { env: process.env, secrets: [token] });
-    const agentService = new AgentService({ settings, traceStore, saveSettings: async next => {
+    const agentService = new TaskManager({ store: new TaskStore(fileURLToPath(new URL(".tabpilot/tasks.json", import.meta.url)), { sanitize: record => traceStore.clean(record) }),
+        browser: requestBridge, serviceOptions: { settings, traceStore, saveSettings: async next => {
         await writeFile(settingsFile, JSON.stringify(next, null, 2), { mode: 0o600 });
-    } });
+    } } });
     const bridge = createBridge({ token, agentService });
+    agentService.approveResearchTab = input => bridge.approveResearchTab(input);
     await new Promise((done, reject) => {
         bridge.server.once("error", reject);
         bridge.server.listen(4311, "127.0.0.1", done);

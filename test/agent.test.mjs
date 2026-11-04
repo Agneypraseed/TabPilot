@@ -74,6 +74,14 @@ test("agent stops a model that repeatedly calls tools at the configured turn lim
     assert.equal(turns, 2);
 });
 
+test("scheduled agent turn limit returns complete SDK tool history for continuation", async () => {
+    const model = { getResponse: async () => call("browser_snapshot", { tabId: 12 }, 1), async *getStreamedResponse() {} };
+    const result = await runBrowserAgent("Read", { server: fixtureServer(), model, targetTabId: 12, maxTurns: 1, continueOnLimit: true });
+    assert.equal(result.continuation, true);
+    assert.ok(result.history.some(item => item.type === "function_call"));
+    assert.ok(result.history.some(item => item.type === "function_call_result"));
+});
+
 test("agent receives screenshot image bytes in model context rather than metadata alone", async () => {
     let turns = 0;
     const model = {
