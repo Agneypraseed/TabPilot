@@ -5,7 +5,8 @@
   "minimum_chrome_version": "118",
   "description": "Gives LLM computer use on Browser",
   "action": {
-    "default_title": "Open TabPilot"
+    "default_title": "Open TabPilot",
+    "default_popup": "sidepanel.html?popup=1"
   },
   "side_panel": { "default_path": "sidepanel.html" },
   "permissions": [

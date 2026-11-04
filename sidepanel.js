@@ -1,5 +1,12 @@
 (() => {
   const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(globalThis.location?.search || "");
+  document.documentElement.dataset.presentation = params.has("popup")
+    ? "popup"
+    : "workspace";
+  const sourceWindow = params.get("window");
+  const initialTab = Number(params.get("tab"));
+  let initialTarget = true;
   let connected = false,
     agent = null,
     tabs = [],
@@ -103,7 +110,11 @@
   }
   async function refreshTabs(preferActive = false) {
     const [available, stored] = await Promise.all([
-      chrome.tabs.query({ currentWindow: true }),
+      chrome.tabs.query(
+        sourceWindow && /^\d+$/.test(sourceWindow)
+          ? { windowId: Number(sourceWindow) }
+          : { currentWindow: true },
+      ),
       chrome.storage.session.get(null),
     ]);
     tabs = available.filter((tab) => /^https?:\/\//.test(tab.url || ""));
@@ -111,8 +122,9 @@
     const desired = active()
       ? agent.tabId
       : preferActive
-        ? available.find((t) => t.active)?.id
+        ? (initialTarget && initialTab) || available.find((t) => t.active)?.id
         : oldId;
+    initialTarget = false;
     selected =
       tabs.find((t) => t.id === desired) ??
       tabs.find((t) => t.id === oldId) ??
@@ -314,6 +326,28 @@
   $("settings-button").addEventListener("click", () =>
     showSettings($("settings-view").hidden),
   );
+  $("open-workspace").addEventListener("click", async () => {
+    try {
+      const query = new URLSearchParams();
+      if (selected?.windowId !== undefined)
+        query.set("window", String(selected.windowId));
+      if (selected?.id !== undefined) query.set("tab", String(selected.id));
+      const url = chrome.runtime.getURL(`sidepanel.html?${query}`);
+      try {
+        if (!chrome.windows?.create) throw new Error("Window UI unavailable");
+        await chrome.windows.create({
+          url,
+          type: "popup",
+          width: 440,
+          height: 880,
+        });
+      } catch {
+        await chrome.tabs.create({ url, active: true });
+      }
+    } catch (error) {
+      notice(error.message);
+    }
+  });
   $("model-label").addEventListener("click", () => showSettings(true));
   $("back").addEventListener("click", () => showSettings(false));
   $("refresh-tabs").addEventListener("click", () =>

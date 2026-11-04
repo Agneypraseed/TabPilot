@@ -9,7 +9,7 @@ let agentState = null;
 const agentRequests = new Map();
 
 // A persistent side panel remains visible while the agent uses the page.
-chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     chrome.storage.session.remove(`tab:${tabId}`);

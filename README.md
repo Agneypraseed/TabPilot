@@ -21,7 +21,7 @@ With the server running, open another terminal in this folder:
 npm run cli -- pair
 ```
 
-Click TabPilot's toolbar icon to open its side panel. Open **Settings**, paste the displayed pairing token, and click **Connect**. Treat this token as a local credential. The bridge listens only on `127.0.0.1:4311`; its generated configuration stays in the ignored `.tabpilot` folder. Restarting the server creates a new token, so pair again afterward. Reloading the extension also requires reconnecting.
+Click TabPilot's toolbar icon to open the agent UI. Use **Open persistent workspace** (↗) to keep it open in a window, or a tab in browsers without extension windows. Open **Settings**, paste the displayed pairing token, and click **Connect**. Treat this token as a local credential. The bridge listens only on `127.0.0.1:4311`; its generated configuration stays in the ignored `.tabpilot` folder. Restarting the server creates a new token, so pair again afterward. Reloading the extension also requires reconnecting.
 
 Open an HTTP or HTTPS website, click TabPilot, and enable access for that tab. List enabled tabs and use an ID from the result:
 
@@ -47,7 +47,9 @@ Only explicitly enabled tabs can be read or controlled. Access follows that tab 
 
 The bridge serves one connected extension at a time and rejects overlapping work on the same tab. Leave it running while using the side panel, CLI, or MCP; reconnect through Settings if disconnected. Page data stays local until an agent/client chooses to send it to a model.
 
-## Agent side panel
+## Agent workspace
+
+The toolbar popup offers quick access to the agent UI. Open a persistent workspace before longer tasks so you can watch, pause, and steer while interacting with pages. In Chrome with side-panel support, the extension's context menu also offers **Open side panel**. Embedded browsers may support only the popup and workspace tab.
 
 Add your provider key to ignored `.env.local` (see `.env.example`) and restart the bridge to load it. API keys stay on the local bridge. In Settings, choose the provider, model ID, and run limits, then save. The configured provider and model appear below the task composer. These panel preferences are stored in ignored `.tabpilot/agent-settings.json`; they do not change CLI flags or `.env.local`.
 

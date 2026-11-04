@@ -19,9 +19,9 @@ async function panel() {
     const agent = { revision: 1, status: "idle", runId: "run-1", events: [], settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
     const event = { addListener() {} };
     const chrome = {
-        tabs: { query: async () => [{ id: 12, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }], onActivated: event, onUpdated: event, onRemoved: event },
+        tabs: { query: async () => [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }], create: async args => calls.push({ createdTab: args }), onActivated: event, onUpdated: event, onRemoved: event },
         storage: { session: { get: async () => stored }, onChanged: event },
-        runtime: { onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
+        runtime: { getURL: path => `chrome-extension://test/${path}`, onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
             calls.push(message);
             if (message.type === "tabpilot:ui-state") return { connected: true, agent };
             if (message.type === "tabpilot:access") { stored[`tab:${message.tabId}`] = message.enabled; return { ok: true, enabled: message.enabled }; }
@@ -32,7 +32,7 @@ async function panel() {
             return { ok: true };
         } }
     };
-    vm.runInNewContext(source, { chrome, document, window, URL, setInterval: () => 1, clearInterval, Date });
+    vm.runInNewContext(source, { chrome, document, window, URL, URLSearchParams, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
     return { document, calls, dispatch, agent, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
@@ -72,4 +72,12 @@ test("panel settings and pause/stop controls route to agent service; reconnect s
     await ui.dispatch("stop");
     assert.equal(ui.calls.at(-1).method, "stop");
     assert.equal(ui.calls.at(-1).payload.runId, "run-1");
+});
+
+test("workspace falls back to an extension tab when the browser cannot create windows", async () => {
+    const ui = await panel();
+    await ui.dispatch("open-workspace");
+    const created = ui.calls.find(c => c.createdTab).createdTab;
+    assert.equal(created.url, "chrome-extension://test/sidepanel.html?window=7&tab=12");
+    assert.equal(created.active, true);
 });
