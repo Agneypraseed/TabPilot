@@ -92,6 +92,8 @@ The `complete_task` SDK tool records completion evidence. Ordinary final answers
 
 `delegate_research` creates a disabled child tab and waits for a scoped user approval. The private paired WebSocket route checks the enabled source tab and exact approved URL before granting access; no grant-access command exists in CLI/MCP. Each specialist has its own tab/session/history. `collect_worker_result` suspends the coordinator's active budget until the actual child outcome arrives. Stopping the parent cancels unfinished children.
 
+`agent.mjs` also reports SDK-local help, delegation, collection, and completion tool inputs/results. `agent-service.mjs` archives those directly, since they do not cross the HTTP browser boundary. Browser calls retain their central archive path without duplication; both appear in the activity trail.
+
 `task-view.js` renders the per-tab queue and parent/worker tree with text-only DOM insertion. Schedules are idle data until due and permission checks pass. Settings remain shared across agents, while prompts, conversations, screenshots, and requests are tied to their assigned tab/run.
 
 ## Scoped file downloads

@@ -192,6 +192,12 @@ export class AgentService {
                     return messages;
                 },
                 onActivity: activity => this.event("tool", activity.tool, activity),
+                onLocalTool: activity => {
+                    this.event("tool", activity.tool, activity);
+                    // Browser tools are archived at the HTTP boundary. SDK-local
+                    // coordination/help tools never cross it, so archive them here.
+                    if (traceContext) this.traceStore.append(traceContext, { kind: "tool", ...activity }).catch(error => this.traceFailure(error));
+                },
                 onObservation: image => { this.state.screenshot = image; this.emit(); }
             });
             this.controller.signal.throwIfAborted();

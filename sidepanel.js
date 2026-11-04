@@ -127,6 +127,13 @@
     $("attention-requests").hidden = !requests.length;
   }
   const labels = {
+    request_user_help: "Asking for your help",
+    delegate_research: "Starting a research specialist",
+    collect_worker_result: "Collecting specialist findings",
+    complete_task: "Recording verified completion",
+    browser_download: "Starting a download",
+    browser_download_status: "Checking download progress",
+    browser_download_cancel: "Canceling a download",
     browser_tabs: "Finding your tab",
     browser_snapshot: "Reading the page",
     browser_click: "Clicking an element",

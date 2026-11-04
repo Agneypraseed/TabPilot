@@ -22,6 +22,7 @@ export async function runBrowserAgent(prompt, {
     getSteering = () => [],
     hasSteering = () => false,
     onActivity = () => {},
+    onLocalTool = () => {},
     onObservation = () => {},
     history = [],
     requestHuman,
@@ -89,9 +90,23 @@ export async function runBrowserAgent(prompt, {
         const runner = new Runner({ tracingDisabled: true, modelSettings: { parallelToolCalls: false } });
         const toolCalls = [];
         const appliedGuidance = [];
-        runner.on("agent_tool_start", (_context, _agent, tool) => {
+        const localNames = new Set([...(requestHuman ? ["request_user_help"] : []), ...extraTools.map(tool => tool.name)]);
+        const pendingLocal = new Map();
+        const decode = value => { try { return JSON.parse(value); } catch { return value; } };
+        runner.on("agent_tool_start", (_context, _agent, tool, details) => {
             toolCalls.push(tool.name);
             onToolCall(tool.name);
+            if (localNames.has(tool.name)) {
+                const callId = details?.toolCall?.callId;
+                pendingLocal.set(callId, tool.name);
+                onLocalTool({ tool: tool.name, phase: "running", callId, arguments: decode(details?.toolCall?.arguments) });
+            }
+        });
+        runner.on("agent_tool_end", (_context, _agent, tool, output, details) => {
+            if (!localNames.has(tool.name)) return;
+            const callId = details?.toolCall?.callId;
+            pendingLocal.delete(callId);
+            onLocalTool({ tool: tool.name, phase: "complete", callId, result: decode(output) });
         });
         let result;
         try { result = await runner.run(agent, [...history, { role: "user", content: prompt }], {
@@ -104,6 +119,7 @@ export async function runBrowserAgent(prompt, {
                 return { ...modelData, input: [...modelData.input, ...guidance.map(content => ({ role: "user", content }))] };
             }
         }); } catch (error) {
+            for (const [callId, name] of pendingLocal) onLocalTool({ tool: name, phase: "error", callId, result: { error: formatAgentError(error) } });
             if (continueOnLimit && error.name === "MaxTurnsExceededError" && Array.isArray(error.state?.history)) {
                 return { answer: "Continuing from the saved tool results.", history: error.state.history, toolCalls, continuation: true };
             }

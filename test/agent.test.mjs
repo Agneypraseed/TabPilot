@@ -186,6 +186,8 @@ test("Stop aborts a paused SDK run without dispatching the pending browser actio
 });
 
 test("SDK human-help tool waits for a real reply then resumes the same task", { timeout: 15000 }, async () => {
+    const archived = [];
+    const scope = "d215b83a-cf77-4afc-a638-bf5233d0cfdd";
     let turns = 0;
     const model = {
         async getResponse(request) {
@@ -194,19 +196,25 @@ test("SDK human-help tool waits for a real reply then resumes the same task", { 
             return { usage: new Usage({ requests: 1 }), output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "I will inspect the Space exhibit." }] }] };
         }, async *getStreamedResponse() {}
     };
-    const service = new AgentService({ env: { OPENAI_API_KEY: "fixture", AGENT_MODEL: "fixture" },
+    const service = new AgentService({ traceStore: { start: async () => {}, append: async (_context, event) => archived.push(event), finish: async () => {} }, env: { OPENAI_API_KEY: "fixture", AGENT_MODEL: "fixture" },
         configure: async () => ({ model, close: async () => {} }),
         run: (prompt, options) => runBrowserAgent(prompt, { ...options, server: fixtureServer() }) });
     const waiting = new Promise(resolve => {
         const unsubscribe = service.subscribe(state => { if (state.requests.length) { unsubscribe(); resolve(state.requests[0]); } });
     });
-    await service.command("start", { prompt: "Inspect an exhibit", tabId: 12, mode: "browser" });
+    await service.command("start", { prompt: "Inspect an exhibit", tabId: 12, mode: "browser", scope });
     const request = await waiting;
     assert.equal(service.state.status, "needs-input");
     assert.equal(turns, 1);
-    await service.command("human-response", { id: request.id, runId: request.runId, decision: "answer", text: "Space exhibit" });
+    await service.command("human-response", { id: request.id, runId: request.runId, scope, decision: "answer", text: "Space exhibit" });
     await service.running;
     assert.equal(service.state.status, "completed");
     assert.equal(service.humanRequests.list().length, 0);
     assert.match(JSON.stringify(service.history), /Space exhibit/);
+    const tools = archived.filter(event => event.tool === "request_user_help");
+    assert.deepEqual(tools.map(event => event.phase), ["running", "complete"]);
+    assert.equal(tools[0].callId, tools[1].callId);
+    assert.equal(tools[0].callId, "call-1");
+    assert.equal(tools[0].arguments.question, "Which exhibit should I inspect?");
+    assert.equal(tools[1].result.text, "Space exhibit");
 });
