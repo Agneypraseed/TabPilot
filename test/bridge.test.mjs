@@ -6,7 +6,7 @@ import vm from "node:vm";
 import { request as httpRequest } from "node:http";
 import { WebSocket } from "ws";
 import { createBridge } from "../server.mjs";
-import { backgroundSource } from "./background-source.mjs";
+import { backgroundSource, mockDebugger } from "./background-source.mjs";
 
 const token = "a".repeat(64);
 const origin = `chrome-extension://${"a".repeat(32)}`;
@@ -121,10 +121,11 @@ test("real background handler enforces permissions through the bridge", async (t
             super(`ws://127.0.0.1:${api.port}/extension`, { origin });
         }
     }
-    const context = vm.createContext({ chrome, WebSocket: BrowserSocket, setTimeout, clearTimeout,
+    const context = vm.createContext({ chrome, WebSocket: BrowserSocket, setTimeout, clearTimeout, URL,
         document: { title: "Example", body: { innerText: "x".repeat(20001) }, querySelectorAll: () => [] },
         crypto: globalThis.crypto, innerWidth: 1000, innerHeight: 800, scrollX: 0, scrollY: 0, devicePixelRatio: 1,
         location: { href: "https://example.com/" } });
+    mockDebugger(chrome, expression => { reads++; return vm.runInContext(expression, context); });
     vm.runInContext(backgroundSource, context);
     await vm.runInContext(`connectBridge("${token}")`, context);
 

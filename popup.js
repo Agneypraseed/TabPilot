@@ -49,8 +49,9 @@ chrome.tabs
             toggleButton.disabled = true;
             try {
                 const nextEnabled = !enabled;
-                await chrome.storage.session.set({ [key]: nextEnabled });
-                enabled = nextEnabled;
+                const response = await chrome.runtime.sendMessage({ type: "tabpilot:access", tabId: tab.id, enabled: nextEnabled });
+                if (!response?.ok) throw new Error(response?.error || "Could not change tab access.");
+                enabled = response.enabled;
 
                 accessStatus.textContent = enabled ? "Access enabled" : "Access disabled";
                 toggleButton.textContent = enabled ? "Disable access" : "Enable access";

@@ -1,14 +1,18 @@
 importScripts("page-runtime.js");
+importScripts("browser-controller.js");
+
+const browser = new TabPilotBrowser(chrome, tabPilotPage);
 
 let bridgeSocket = null;
 let bridgeReady = false;
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     chrome.storage.session.remove(`tab:${tabId}`);
+    void browser.detach(tabId);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status"].includes(message?.type)) return false;
+    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access"].includes(message?.type)) return false;
 
     // Only our extension pages can request snapshots through this handler.
     if (sender.id !== chrome.runtime.id || sender.tab) {
@@ -20,7 +24,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ connected: bridgeReady });
         return false;
     }
-    const operation = message.type === "tabpilot:connect"
+    const operation = message.type === "tabpilot:access"
+        ? browser.setAccess(message.tabId, message.enabled).then(result => ({ ok: true, ...result }))
+        : message.type === "tabpilot:connect"
         ? connectBridge(message.token).then(() => ({ ok: true }))
         : readTabSnapshot(message.tabId).then((snapshot) => ({ ok: true, snapshot }));
     operation.then(
@@ -32,28 +38,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function readTabSnapshot(tabId) {
-    if (!Number.isInteger(tabId) || tabId < 0) throw new Error("Invalid tab ID.");
-
-    const key = `tab:${tabId}`;
-    const stored = await chrome.storage.session.get(key);
-    if (stored[key] !== true) throw new Error("Access disabled. Enable this tab before reading it.");
-
-    const tab = await chrome.tabs.get(tabId);
-    if (!/^https?:\/\//.test(tab.url ?? "")) {
-        throw new Error("Open a regular HTTP or HTTPS page, then click TabPilot again.");
-    }
-
-    const [frame] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: tabPilotPage,
-        args: ["snapshot", {}]
-    });
-
-    // Do not return a snapshot if access was revoked while reading.
-    const current = await chrome.storage.session.get(key);
-    if (current[key] !== true) throw new Error("Access was disabled while reading.");
-    if (!frame?.result) throw new Error("The page did not return a snapshot.");
-    return frame.result;
+    return browser.snapshot(tabId);
 }
 
 async function listEnabledTabs() {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-import { backgroundSource } from "./background-source.mjs";
+import { backgroundSource, mockDebugger } from "./background-source.mjs";
 const popupSource = await readFile(new URL("../popup.js", import.meta.url), "utf8");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -21,7 +21,8 @@ function background({ url = "https://example.com/", revokeDuringRead = false } =
             return [{ result: { text: "Example" } }];
         } }
     };
-    vm.runInNewContext(backgroundSource, { chrome });
+    mockDebugger(chrome, async () => (await chrome.scripting.executeScript())[0].result);
+    vm.runInNewContext(backgroundSource, { chrome, URL });
     return {
         get executions() { return executions; },
         request(tabId = 12, sender = { id: "test" }) {
@@ -50,7 +51,7 @@ test("access revoked during reading prevents returning page content", async () =
     const worker = background({ revokeDuringRead: true });
     const result = await worker.request();
     assert.equal(result.ok, false);
-    assert.match(result.error, /disabled while reading/);
+    assert.match(result.error, /Access disabled/);
     assert.equal(result.snapshot, undefined);
     assert.equal(worker.executions, 1);
 });
@@ -74,6 +75,12 @@ async function popup(stored, tabId, failSave = false) {
         } },
         runtime: { sendMessage: async message => {
             messages.push(message);
+            if (message.type === "tabpilot:access") {
+                if (failSave) throw new Error("Storage unavailable");
+                if (message.enabled) stored[`tab:${message.tabId}`] = true;
+                else delete stored[`tab:${message.tabId}`];
+                return { ok: true, enabled: message.enabled };
+            }
             return message.type === "tabpilot:bridge-status" ? { connected: false }
                 : { ok: true, snapshot: { title: "Example", text: "<b>page text</b>" } };
         } }
@@ -94,7 +101,7 @@ test("popup saves per-tab access and restores it after reopening", async () => {
     const otherTab = await popup(stored, 34);
     assert.equal(otherTab.element("access-status").textContent, "Access disabled");
     await reopened.click("toggle-access");
-    assert.equal(stored["tab:12"], false);
+    assert.equal(stored["tab:12"], undefined);
 });
 
 test("popup requests the current tab and displays returned data as text", async () => {
