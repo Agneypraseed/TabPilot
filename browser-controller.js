@@ -341,11 +341,21 @@ class TabPilotBrowser {
             } else if (method === "open") {
                 const url = this.httpUrl(params.url);
                 const source = await this.permitted(tabId);
-                const created = await this.chrome.tabs.create({ url, active: params.active === true,
-                    ...(Number.isSafeInteger(source.windowId) ? { windowId: source.windowId } : {}) });
+                const options = { url, active: params.active === true,
+                    ...(Number.isSafeInteger(source.windowId) ? { windowId: source.windowId } : {}) };
+                let created;
+                try { created = await this.chrome.tabs.create(options); }
+                catch (error) {
+                    // This embedded host rejects inactive creation before opening
+                    // anything. Do not retry general errors: their outcome may be unknown.
+                    if (options.active || !/(?:^|:\s*)Owl extension-created tabs must be active\.?$/i.test(error.message ?? "")) throw error;
+                    await this.permitted(tabId);
+                    options.active = true;
+                    created = await this.chrome.tabs.create(options);
+                }
                 // All newly opened tabs start disabled, including agent-created tabs.
                 await this.chrome.storage.session.remove(`tab:${created.id}`);
-                return { action: method, tabId: created.id, url, enabled: false,
+                return { action: method, tabId: created.id, url, enabled: false, openedInForeground: options.active,
                     message: "New tab opened disabled. The user must explicitly enable it before the agent can access it." };
             } else if (method === "close") {
                 await this.permitted(tabId);

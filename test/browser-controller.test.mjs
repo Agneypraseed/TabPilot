@@ -61,6 +61,27 @@ test("disabled tabs cannot attach and explicit enable/disable controls the debug
     await assert.rejects(browser.snapshot(12), /Access disabled/);
 });
 
+test("embedded foreground-only tab creation falls back once and keeps access disabled", async () => {
+    const { browser, chrome, stored } = controllerFixture();
+    await browser.setAccess(12, true);
+    const attempts = [];
+    chrome.tabs.create = async options => {
+        attempts.push({ ...options });
+        if (!options.active) throw new Error("Owl extension-created tabs must be active.");
+        return { id: 34, ...options };
+    };
+    const result = await browser.action(12, "open", { url: "https://example.com/research", active: false });
+    assert.deepEqual(attempts.map(item => item.active), [false, true]);
+    assert.equal(attempts[1].windowId, 1);
+    assert.equal(result.openedInForeground, true);
+    assert.equal(result.enabled, false);
+    assert.equal(stored["tab:34"], undefined);
+    attempts.length = 0;
+    chrome.tabs.create = async options => { attempts.push(options); throw new Error("General failure; outcome unknown"); };
+    await assert.rejects(browser.action(12, "open", { url: "https://example.com/" }), /General failure/);
+    assert.equal(attempts.length, 1);
+});
+
 test("click, fill, key, and scroll use CDP input and return observed state", async () => {
     const { browser, calls } = controllerFixture();
     await browser.setAccess(12, true);
