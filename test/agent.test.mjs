@@ -92,3 +92,27 @@ test("agent receives screenshot image bytes in model context rather than metadat
     assert.equal(result.answer, "Image received.");
     assert.deepEqual(result.toolCalls, ["browser_screenshot"]);
 });
+
+test("SDK incorporates mid-run guidance before executing a newly proposed obsolete action", async () => {
+    let turns = 0, pending = [], rawCalls = 0;
+    const server = fixtureServer();
+    const raw = server.callToolResult.bind(server);
+    server.callToolResult = async (...args) => { if (args[0] === "browser_snapshot") rawCalls++; return raw(...args); };
+    const model = {
+        async getResponse(request) {
+            if (++turns === 1) {
+                // User steers while this model response is in flight.
+                pending.push("Instead, summarize only the title.");
+                return call("browser_snapshot", { tabId: 12 }, turns);
+            }
+            assert.match(JSON.stringify(request.input), /Instead, summarize only the title/);
+            assert.match(JSON.stringify(request.input), /Reconsider this action/);
+            return { usage: new Usage({ requests: 1 }), output: [{ type: "message", role: "assistant", status: "completed",
+                content: [{ type: "output_text", text: "Updated task received." }] }] };
+        },
+        async *getStreamedResponse() {}
+    };
+    await runBrowserAgent("Read the page", { server, model, targetTabId: 12,
+        hasSteering: () => pending.length > 0, getSteering: () => pending.splice(0) });
+    assert.equal(rawCalls, 0, "obsolete action must never reach the browser");
+});

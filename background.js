@@ -5,6 +5,11 @@ const browser = new TabPilotBrowser(chrome, tabPilotPage);
 
 let bridgeSocket = null;
 let bridgeReady = false;
+let agentState = null;
+const agentRequests = new Map();
+
+// A persistent side panel remains visible while the agent uses the page.
+chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     chrome.storage.session.remove(`tab:${tabId}`);
@@ -12,7 +17,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access"].includes(message?.type)) return false;
+    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access", "tabpilot:agent", "tabpilot:ui-state", "tabpilot:disconnect"].includes(message?.type)) return false;
 
     // Only our extension pages can request snapshots through this handler.
     if (sender.id !== chrome.runtime.id || sender.tab) {
@@ -24,8 +29,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ connected: bridgeReady });
         return false;
     }
+    if (message.type === "tabpilot:ui-state") {
+        sendResponse({ connected: bridgeReady, agent: agentState });
+        return false;
+    }
+    if (message.type === "tabpilot:disconnect") {
+        bridgeSocket?.close();
+        sendResponse({ ok: true });
+        return false;
+    }
     const operation = message.type === "tabpilot:access"
         ? browser.setAccess(message.tabId, message.enabled).then(result => ({ ok: true, ...result }))
+        : message.type === "tabpilot:agent"
+        ? requestAgent(message.method, message.payload)
         : message.type === "tabpilot:connect"
         ? connectBridge(message.token).then(() => ({ ok: true }))
         : readTabSnapshot(message.tabId).then((snapshot) => ({ ok: true, snapshot }));
@@ -36,6 +52,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Keep the response channel open while storage and script execution finish.
     return true;
 });
+
+function requestAgent(method, payload = {}) {
+    if (!bridgeReady || bridgeSocket?.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Connect the local bridge in Settings first."));
+    if (agentRequests.size >= 8) return Promise.reject(new Error("Wait for the previous agent command."));
+    const id = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { agentRequests.delete(id); reject(new Error("Agent command timed out. Restart the bridge if it is out of date.")); }, 10000);
+        agentRequests.set(id, { resolve, reject, timer });
+        bridgeSocket.send(JSON.stringify({ type: "agent-request", id, method, payload }));
+    });
+}
+
+function publishAgentState(state) {
+    agentState = state;
+    // No panel may be open; losing a UI observer is not a runtime error.
+    chrome.runtime.sendMessage?.({ type: "tabpilot:agent-event", state }).catch(() => {});
+}
 
 async function readTabSnapshot(tabId) {
     return browser.snapshot(tabId);
@@ -82,6 +115,17 @@ function connectBridge(token) {
                 resolve();
                 return;
             }
+            if (ready && message.type === "agent-state") { publishAgentState(message.state); return; }
+            if (ready && message.type === "agent-response") {
+                const pending = agentRequests.get(message.id);
+                if (pending) {
+                    clearTimeout(pending.timer);
+                    agentRequests.delete(message.id);
+                    if (message.ok) { publishAgentState(message.state); pending.resolve({ ok: true, state: message.state }); }
+                    else pending.reject(new Error(message.error || "Agent request failed."));
+                }
+                return;
+            }
             if (!ready || message.type !== "request" || typeof message.id !== "string") return;
             try {
                 let data;
@@ -107,6 +151,9 @@ function connectBridge(token) {
             if (bridgeSocket === socket) {
                 bridgeSocket = null;
                 bridgeReady = false;
+                agentState = null;
+                for (const pending of agentRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Bridge disconnected.")); }
+                agentRequests.clear();
             }
             if (!ready) reject(new Error("Pairing failed. Check the token and server."));
         };

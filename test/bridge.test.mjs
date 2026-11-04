@@ -6,10 +6,36 @@ import vm from "node:vm";
 import { request as httpRequest } from "node:http";
 import { WebSocket } from "ws";
 import { createBridge } from "../server.mjs";
+import { AgentService } from "../agent-service.mjs";
 import { backgroundSource, mockDebugger } from "./background-source.mjs";
 
 const token = "a".repeat(64);
 const origin = `chrome-extension://${"a".repeat(32)}`;
+
+test("authenticated extension can start and observe an agent run; disconnect cancels it", async t => {
+    let options;
+    const service = new AgentService({ env: { AGENT_MODEL: "fixture", OPENAI_API_KEY: "secret-fixture-key" },
+        configure: async () => ({ model: {}, modelSettings: {}, close: async () => {} }),
+        run: async (_prompt, o) => { options = o; await new Promise(resolve => o.signal.addEventListener("abort", resolve, { once: true })); o.signal.throwIfAborted(); }
+    });
+    const api = await setup(t, { agentService: service });
+    const socket = new WebSocket(`ws://127.0.0.1:${api.port}/extension`, { origin });
+    const received = [];
+    socket.on("message", data => received.push(JSON.parse(data)));
+    await once(socket, "open");
+    socket.send(JSON.stringify({ type: "authenticate", token }));
+    while (!received.some(m => m.type === "agent-state")) await new Promise(r => setImmediate(r));
+    assert.ok(!JSON.stringify(received).includes("secret-fixture-key"));
+    socket.send(JSON.stringify({ type: "agent-request", id: "start", method: "start", payload: { prompt: "Read", tabId: 12, mode: "computer" } }));
+    while (!received.some(m => m.type === "agent-response" && m.id === "start")) await new Promise(r => setImmediate(r));
+    assert.equal(received.find(m => m.id === "start").ok, true);
+    assert.equal(service.state.status, "running");
+    socket.close();
+    await once(socket, "close");
+    await service.running;
+    assert.equal(options.signal.aborted, true);
+    assert.equal(service.state.status, "stopped");
+});
 
 async function setup(t, options = {}) {
     const bridge = createBridge({ token, ...options });

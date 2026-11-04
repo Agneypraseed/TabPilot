@@ -1,10 +1,13 @@
 import { createServer } from "node:http";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { parseBrowserCommand } from "./commands.mjs";
+import { AgentService } from "./agent-service.mjs";
 
 async function readCommand(request) {
     const text = await new Promise((resolve, reject) => {
@@ -20,11 +23,14 @@ async function readCommand(request) {
     return parseBrowserCommand(JSON.parse(text));
 }
 
-export function createBridge({ token, timeoutMs = 20000 }) {
+export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
     if (!token) throw new Error("A pairing token is required.");
     let extension = null;
     const pending = new Map();
     const sockets = new Set();
+    const unsubscribe = agentService?.subscribe(state => {
+        if (extension?.readyState === WebSocket.OPEN) extension.send(JSON.stringify({ type: "agent-state", state }));
+    });
     const authenticate = (candidate) => {
         const actual = Buffer.from(candidate ?? "");
         const expected = Buffer.from(token);
@@ -104,6 +110,18 @@ export function createBridge({ token, timeoutMs = 20000 }) {
                     authenticated = true;
                     extension = client;
                     client.send(JSON.stringify({ type: "ready" }));
+                    if (agentService) client.send(JSON.stringify({ type: "agent-state", state: agentService.snapshot() }));
+                    return;
+                }
+                if (message?.type === "agent-request" && typeof message.id === "string" && message.id.length <= 100) {
+                    if (!agentService) {
+                        client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: "Restart the bridge to enable the agent interface." }));
+                        return;
+                    }
+                    Promise.resolve().then(() => agentService.command(message.method, message.payload)).then(
+                        state => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: true, state })); },
+                        error => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: error instanceof Error && error.name === "ZodError" ? "Invalid agent settings or task." : String(error.message ?? "Agent command failed.") })); }
+                    );
                     return;
                 }
                 if (message?.type !== "response" || typeof message.id !== "string") return;
@@ -121,6 +139,7 @@ export function createBridge({ token, timeoutMs = 20000 }) {
                 sockets.delete(client);
                 if (extension !== client) return;
                 extension = null;
+                agentService?.disconnect();
                 for (const { response, timer } of pending.values()) {
                     clearTimeout(timer);
                     reply(response, 503, { ok: false, error: "Extension disconnected." });
@@ -140,6 +159,8 @@ export function createBridge({ token, timeoutMs = 20000 }) {
     return {
         server,
         async close() {
+            unsubscribe?.();
+            agentService?.disconnect();
             clearInterval(heartbeat);
             for (const client of sockets) client.terminate();
             await new Promise((done) => server.close(done));
@@ -149,8 +170,17 @@ export function createBridge({ token, timeoutMs = 20000 }) {
 }
 
 async function main() {
+    const envFile = new URL(".env.local", import.meta.url);
+    if (existsSync(envFile)) loadEnvFile(fileURLToPath(envFile));
+    const settingsFile = new URL(".tabpilot/agent-settings.json", import.meta.url);
+    let settings;
+    try { settings = JSON.parse(await readFile(settingsFile, "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") throw new Error("Invalid local agent settings. Check .tabpilot/agent-settings.json."); }
+    const agentService = new AgentService({ settings, saveSettings: async next => {
+        await writeFile(settingsFile, JSON.stringify(next, null, 2), { mode: 0o600 });
+    } });
     const token = randomBytes(32).toString("hex");
-    const bridge = createBridge({ token });
+    const bridge = createBridge({ token, agentService });
     await new Promise((done, reject) => {
         bridge.server.once("error", reject);
         bridge.server.listen(4311, "127.0.0.1", done);

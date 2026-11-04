@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
 import { parseAgentArguments, agentUsage } from "./agent-options.mjs";
+import { observedBrowserServer } from "./agent-browser-session.mjs";
 
 export async function runBrowserAgent(prompt, {
     model = DEFAULT_OPENAI_MODEL,
@@ -19,7 +20,15 @@ export async function runBrowserAgent(prompt, {
     }),
     maxTurns = 30,
     signal = AbortSignal.timeout(300000),
-    onToolCall = () => {}
+    onToolCall = () => {},
+    targetTabId,
+    mode = "browser",
+    checkpoint = async () => {},
+    getSteering = () => [],
+    hasSteering = () => false,
+    onActivity = () => {},
+    onObservation = () => {},
+    history = []
 } = {}) {
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("Provide a browser task.");
     try {
@@ -30,11 +39,20 @@ export async function runBrowserAgent(prompt, {
         if (!available.structuredContent?.tabs?.length) {
             throw new Error("No enabled tabs. Enable access in the TabPilot popup first.");
         }
+        if (targetTabId !== undefined && !available.structuredContent.tabs.some(tab => tab.id === targetTabId)) {
+            throw new Error("Enable access on the selected tab before starting a task.");
+        }
+        const observed = observedBrowserServer(server, { signal, targetTabId, mode, checkpoint, hasSteering, onActivity, onObservation });
+        if (mode === "computer" && targetTabId !== undefined) {
+            await observed.callToolResult("browser_focus", { tabId: targetTabId });
+        }
 
         const agent = new Agent({
             name: "TabPilot browser agent",
             model,
-            instructions: "Complete the user's task in explicitly enabled browser tabs. " +
+            instructions: (targetTabId !== undefined ? `Work only in selected tab ${targetTabId}. ` : "") +
+                (mode === "computer" ? "Computer use mode: inspect the screenshot observations after actions. Keep the controlled tab visible. " : "") +
+                "Complete the user's task in explicitly enabled browser tabs. " +
                 "Use browser_tabs to discover tab IDs; never invent IDs. Plan a short sequence, act, inspect the returned state, and revise when needed. " +
                 "Start with browser_snapshot. Prefer semantic element refs for clicks, filling fields, and selection. " +
                 "Each new snapshot supersedes old refs. Actions return fresh snapshots: use those new refs for subsequent steps. Perform only one operation at a time on each tab. " +
@@ -51,7 +69,7 @@ export async function runBrowserAgent(prompt, {
                 "Do not bypass CAPTCHAs, authentication, browser warnings, or restricted pages. Ask the user to handle them. " +
                 "Verify the requested outcome in tool results before reporting success. Report failures, incomplete work, and truncation honestly. " +
                 "Give a concise final answer describing the observed result.",
-            mcpServers: [server],
+            mcpServers: [observed],
             modelSettings
         });
         const runner = new Runner({ tracingDisabled: true, modelSettings: { parallelToolCalls: false } });
@@ -60,9 +78,17 @@ export async function runBrowserAgent(prompt, {
             toolCalls.push(tool.name);
             onToolCall(tool.name);
         });
-        const result = await runner.run(agent, prompt, { maxTurns, signal });
+        const result = await runner.run(agent, [...history, { role: "user", content: prompt }], {
+            maxTurns, signal,
+            callModelInputFilter: async ({ modelData }) => {
+                await checkpoint();
+                signal.throwIfAborted();
+                const guidance = getSteering();
+                return { ...modelData, input: [...modelData.input, ...guidance.map(content => ({ role: "user", content }))] };
+            }
+        });
         if (!result.finalOutput) throw new Error("The model returned no final answer.");
-        return { answer: result.finalOutput, toolCalls };
+        return { answer: result.finalOutput, toolCalls, history: result.history };
     } finally {
         await server.close();
     }
