@@ -306,6 +306,137 @@ h3 {
   margin: 0 20px 10px;
   padding: 3px;
 }
+.view-tabs {
+  display: flex;
+  gap: 22px;
+  margin: 0 20px 14px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.view-tabs button {
+  border: 0;
+  border-radius: 0;
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 12px;
+  background: transparent;
+}
+.view-tabs button[aria-pressed="true"] {
+  color: var(--blue);
+  border-bottom: 2px solid var(--blue);
+  font-weight: 650;
+}
+.history-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 20px 24px;
+  scrollbar-width: thin;
+  overflow-wrap: anywhere;
+}
+.history-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.history-header > div {
+  min-width: 0;
+  flex: 1;
+}
+.history-header h2 {
+  font-size: 20px;
+}
+.history-header p {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#history-status {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 18px 0 10px;
+}
+.history-run {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 15px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: white;
+}
+.history-run strong {
+  font-size: 13px;
+  font-weight: 600;
+  display: block;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.history-run small,
+.history-meta {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.7;
+}
+.history-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #497257;
+}
+.history-event {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.history-event > p {
+  line-height: 1.7;
+  margin-top: 5px;
+}
+.history-event > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.history-event > strong { display:block; margin-top:5px; }
+.history-event summary {
+  cursor: pointer;
+  list-style-position: inside;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.history-event pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    10px/1.65 ui-monospace,
+    monospace;
+  background: #f6f7fb;
+  padding: 12px;
+  border-radius: 8px;
+  max-height: 350px;
+  overflow: auto;
+  margin: 10px 0;
+}
+.history-event button {
+  font-size: 11px;
+  margin: 8px 6px 0 0;
+}
+.history-event.error {
+  color: #a43c24;
+}
+#history-more {
+  margin-top: 18px;
+  font-size: 12px;
+}
+#history-back {
+  margin: 4px 0 12px;
+}
 .mode-switch button {
   border: 0;
   background: transparent;

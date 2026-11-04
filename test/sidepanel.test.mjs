@@ -16,16 +16,18 @@ async function panel() {
     });
     let runtimeListener;
     const stored = {}, calls = [];
-    const agent = { revision: 1, status: "idle", runId: "run-1", events: [], settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
+    const agent = { revision: 1, status: "idle", runId: "run-1", events: [], historyAvailable: true, historyRevision: 0, settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
     const event = { addListener() {} };
     const chrome = {
-        tabs: { query: async () => [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }], create: async args => calls.push({ createdTab: args }), onActivated: event, onUpdated: event, onRemoved: event },
+        tabs: { query: async () => [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 7, title: "Other tab", url: "https://other.example/" }], create: async args => calls.push({ createdTab: args }), onActivated: event, onUpdated: event, onRemoved: event },
         storage: { session: { get: async () => stored }, onChanged: event },
         runtime: { getURL: path => `chrome-extension://test/${path}`, onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
             calls.push(message);
             if (message.type === "tabpilot:ui-state") return { connected: true, agent };
             if (message.type === "tabpilot:access") { stored[`tab:${message.tabId}`] = message.enabled; return { ok: true, enabled: message.enabled }; }
             if (message.type === "tabpilot:agent") {
+                if (message.method === "history-list") return { ok: true, history: { runs: message.payload.tabId === 12 ? [{ runId: "history-1", task: "Find <img src=x>", source: "workspace", model: "fixture", status: "completed", startedAt: 1 }] : [], nextOffset: null } };
+                if (message.method === "history-events") return { ok: true, history: { events: [{ kind: "assistant", text: "Found the page", time: 1 }, { kind: "tool", tool: "click", phase: "complete", time: 1, result: { clicked: true } }], nextOffset: null } };
                 if (message.method === "start") Object.assign(agent, { status: "running", tabId: 12, mode: message.payload.mode, revision: 2, events: [{ id: "message-1", kind: "user", text: message.payload.prompt }] });
                 return { ok: true, state: agent };
             }
@@ -47,7 +49,7 @@ test("side panel enables selected tab, submits task with mode and renders untrus
     await ui.dispatch("mode-computer");
     $("task").value = "Search <img src=x onerror=alert(1)>";
     await ui.dispatch("task-form", "submit");
-    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(c => c.method === "start").payload)), { prompt: "Search <img src=x onerror=alert(1)>", tabId: 12, mode: "computer" });
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(c => c.method === "start").payload)), { prompt: "Search <img src=x onerror=alert(1)>", tabId: 12, mode: "computer", tabTitle: "Test <b>tab</b>" });
     assert.equal($("messages").querySelector("img"), null);
     assert.match($("messages").textContent, /<img/);
     assert.equal($("target-tab").disabled, true);
@@ -104,4 +106,40 @@ test("a restarted bridge replaces old high-revision state instead of appearing p
     assert.equal(ui.document.getElementById("run-controls").hidden, true);
     ui.receive({ ...ui.agent, sessionId: "new-runtime", revision: -1, status: "running", mode: "computer", tabId: 12 });
     assert.equal(ui.document.getElementById("run-controls").hidden, true, "out-of-order messages from the same runtime are ignored");
+});
+
+test("History loads only the selected tab, displays trace details safely, and stays separate from Agent", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    await ui.dispatch("history-tab");
+    assert.equal($("conversation").hidden, true);
+    assert.equal($("history-view").hidden, false);
+    assert.equal(ui.calls.find(c => c.method === "history-list").payload.tabId, 12);
+    assert.equal($("history-content").querySelector("img"), null);
+    assert.match($("history-content").textContent, /Find <img/);
+    $("history-content").querySelector("button").click();
+    await flush();
+    assert.match($("history-content").textContent, /Found the page/);
+    assert.match($("history-content").textContent, /clicked/);
+    $("target-tab").value = "34";
+    await ui.dispatch("target-tab", "change");
+    assert.equal($("history-content").textContent, "");
+    assert.match($("history-status").textContent, /No activity/);
+    await ui.dispatch("agent-tab");
+    assert.equal($("history-view").hidden, true);
+    assert.equal($("conversation").hidden, false);
+});
+
+test("late history replies cannot show a previous tab's records after switching tabs", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    const send = ui.chrome.runtime.sendMessage;
+    let release;
+    ui.chrome.runtime.sendMessage = message => message.method === "history-list" && message.payload.tabId === 12
+        ? new Promise(resolve => { release = resolve; }) : send(message);
+    await ui.dispatch("history-tab");
+    $("target-tab").value = "34";
+    await ui.dispatch("target-tab", "change");
+    release({ ok: true, history: { runs: [{ runId: "old", task: "Other tab secret", startedAt: 1 }], nextOffset: null } });
+    await flush(); await flush();
+    assert.equal($("history-content").textContent, "");
+    assert.equal($("history-tab-label").textContent, "Other tab");
 });

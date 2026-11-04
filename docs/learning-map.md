@@ -68,6 +68,14 @@ Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The u
 
 `typeText` sends short, Unicode-safe chunks with a 45ms pause, capped at 24 chunks for long values. Before each insertion, `page-runtime.js` checks that the same cached element remains focused, connected, visible, and editable. It does not re-focus a different target after the user takes over. These are trusted input operations, with the existing access check before every command.
 
+## Per-tab trace history
+
+`trace-history.mjs` stores append-only run events and separate screenshot files under `.tabpilot/history/<browser-session>/tab-<id>/<run-id>/`. Metadata records task, source, provider/model, timestamps, and outcome. Reads and writes are serialized; history pages are bounded and images load only on demand. The live conversation's 160-event cap does not truncate the archive. Starting a new chat does not delete it.
+
+`background.js` retains a browser-history namespace in Chrome local storage across extension reloads and changes it on browser startup. The bridge binds history requests to that authenticated extension namespace. Tab, run, and image identifiers are validated before constructing file paths. This avoids mixing different tabs, browser instances, or reused tab IDs.
+
+`agent-service.mjs` records workspace tasks, guidance, status changes, results, and errors. Its MCP subprocess carries a run ID, allowing `server.mjs` to attach browser requests/results to the correct workspace task. The same authenticated HTTP boundary also records external CLI/MCP calls. It does not record authorization headers or model internals; typed text arguments are omitted, and configured secrets are redacted. `sidepanel.js` displays only the selected tab's history and ignores stale responses after switching tabs.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.

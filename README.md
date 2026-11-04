@@ -64,7 +64,19 @@ Select a web tab and enable access, then describe your task:
 - Send another message while a task is running to steer the next action. Follow-up tasks retain conversation context for the same tab. **New chat** clears that context.
 - **Pause** takes effect between operations; **Resume** continues. **Stop** cancels the run and prevents subsequent actions. Neither can undo an action already sent to Chrome. Disconnecting the extension also stops a panel run.
 
-Panel runs stay restricted to their selected tab. Closing the panel does not stop the local runtime; reopening restores its current state. Conversation and screenshots are held in memory, not saved to disk, and reset when the bridge restarts. Screenshots sent in Computer use mode increase model usage and require a model that accepts images. CLI and MCP remain available independently; avoid directing multiple agents at the same tab at once.
+Panel runs stay restricted to their selected tab. Closing the panel does not stop the local runtime; reopening restores its current state. Live conversation context resets when the bridge restarts; saved History remains available. Screenshots sent in Computer use mode increase model usage and require a model that accepts images. CLI and MCP remain available independently; avoid directing multiple agents at the same tab at once.
+
+## Tab history
+
+Choose a browser tab, then open **History** beside **Agent**. It shows only that tab's recorded activity, newest first:
+
+- Workspace tasks, guidance, pause/resume/stop events, final responses, and errors are grouped into runs with provider/model information.
+- Tool requests and results have expandable details. Screenshots open on demand.
+- Calls from terminals and other agents are included as labeled **CLI**, **MCP**, or **API** entries. External calls do not include an agent's private chat or task prompt.
+
+History is stored locally under ignored `.tabpilot/history/`, including page observations and screenshots. Known configured credentials and the pairing token are redacted; typed text arguments are omitted, while normal field values can appear in resulting page snapshots. Password field values remain redacted. Files remain until you remove them. **New chat** clears the active conversation without deleting History, and viewing an old run never replays browser actions or sends its contents to a model.
+
+History persists across bridge restarts and extension reloads for the same open tab. A fresh browser session uses a new history namespace so reused numeric tab IDs cannot mix unrelated tabs. Navigation within a tab keeps that tab's history. Recording starts when this feature is running; earlier work cannot be reconstructed retroactively.
 
 ## MCP
 

@@ -2,7 +2,7 @@
 (() => {
     let listener;
     const event = { addListener() {} };
-    const state = { revision: 1, status: "idle", runId: null, events: [], settings: { provider: "meta", model: "muse-spark-1.3", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }, { id: "openai", configured: true }] };
+    const state = { revision: 1, status: "idle", runId: null, events: [], historyAvailable: true, historyRevision: 1, settings: { provider: "meta", model: "muse-spark-1.3", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }, { id: "openai", configured: true }] };
     let connected = true, enabled = true;
     globalThis.chrome = {
         tabs: { query: async () => [{ id: 12, title: "Google", url: "https://www.google.com/", active: true }], onActivated: event, onUpdated: event, onRemoved: event },
@@ -14,6 +14,16 @@
             if (message.type === "tabpilot:disconnect") { connected = false; return { ok: true }; }
             if (message.type === "tabpilot:agent") {
                 const { method, payload } = message;
+                if (method === "history-list") return { ok: true, history: { runs: [
+                    { runId: "fixture-history-1", task: "Search Google for testing my agent", source: "workspace", model: "muse-spark-1.3", status: "completed", startedAt: Date.now() - 120000 },
+                    { runId: "fixture-history-2", task: "CLI · snapshot", source: "cli", status: "completed", startedAt: Date.now() - 300000 }
+                ], nextOffset: null } };
+                if (method === "history-events") return { ok: true, history: { events: [
+                    { kind: "user", text: "Search Google for testing my agent", time: Date.now() - 120000 },
+                    { kind: "tool", tool: "fill", phase: "running", arguments: { ref: "snapshot:e3", text: "[typed value omitted; inspect resulting page state]" }, time: Date.now() - 115000 },
+                    { kind: "tool", tool: "fill", phase: "complete", result: { action: "fill", snapshot: { title: "Google", text: "testing my agent" } }, time: Date.now() - 114000 },
+                    { kind: "assistant", text: "Google results are ready.", time: Date.now() - 110000 }
+                ], nextOffset: null } };
                 if (method === "settings") state.settings = payload;
                 if (method === "clear") { state.events = []; state.status = "idle"; }
                 if (method === "start") {

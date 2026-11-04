@@ -17,6 +17,13 @@
     busy = false,
     screenshotData = "",
     rendered = "";
+  let workspaceView = "agent",
+    historyRun = null,
+    historyTab = null,
+    historyNext = null,
+    historyBusy = false,
+    historyReload = false,
+    historyRevision = -1;
   const active = () =>
     ["running", "pausing", "paused", "stopping"].includes(agent?.status);
   const labels = {
@@ -79,6 +86,177 @@
     if (show) {
       fillSettings();
       $("settings-view").scrollTop = 0;
+    }
+  }
+  function showWorkspaceView(view) {
+    workspaceView = view;
+    $("history-view").hidden = view !== "history";
+    for (const id of ["mode-switch", "conversation", "composer-area"])
+      $(id).hidden = view !== "agent";
+    $("agent-tab").setAttribute("aria-pressed", String(view === "agent"));
+    $("history-tab").setAttribute("aria-pressed", String(view === "history"));
+    if (view === "history") {
+      if (historyTab !== selected?.id) resetHistory();
+      refreshHistory();
+    }
+  }
+  function resetHistory() {
+    historyTab = selected?.id;
+    historyRun = null;
+    historyNext = null;
+    $("history-content").replaceChildren();
+    $("history-more").hidden = true;
+    $("history-back").hidden = true;
+  }
+  function historyTime(time) {
+    return new Date(time).toLocaleString([], {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  }
+  function historyRunRow(run) {
+    const button = document.createElement("button");
+    button.className = "history-run";
+    const title = document.createElement("strong");
+    title.textContent = run.task || "Browser activity";
+    const meta = document.createElement("small");
+    meta.textContent = `${historyTime(run.startedAt)} · ${run.source === "workspace" ? "Workspace" : (run.source || "API").toUpperCase()}${run.model ? ` · ${run.model}` : ""}`;
+    const status = document.createElement("span");
+    status.className = "history-badge";
+    status.textContent = run.status;
+    button.append(title, meta, status);
+    button.addEventListener("click", () => {
+      historyRun = run;
+      historyNext = null;
+      $("history-content").replaceChildren();
+      refreshHistory();
+    });
+    return button;
+  }
+  function historyEventRow(event, tabId, runId) {
+    const row = document.createElement("section");
+    row.className = `history-event ${event.phase === "error" || event.kind === "error" ? "error" : ""}`;
+    const time = document.createElement("small");
+    time.textContent = historyTime(event.time);
+    row.append(time);
+    if (event.kind === "tool") {
+      const details = document.createElement("details"),
+        summary = document.createElement("summary"),
+        pre = document.createElement("pre");
+      summary.textContent = `${labels[event.tool] || labels[`browser_${event.tool}`] || event.tool} · ${event.phase || "complete"}`;
+      pre.textContent = JSON.stringify(
+        event.arguments !== undefined
+          ? { arguments: event.arguments }
+          : { result: event.result },
+        null,
+        2,
+      );
+      details.append(summary, pre);
+      row.append(details);
+    } else {
+      const label = document.createElement("strong");
+      label.textContent =
+        { user: "You", assistant: "Agent", status: "Status", error: "Error" }[
+          event.kind
+        ] || "Activity";
+      const text = document.createElement("p");
+      text.textContent = event.text || "";
+      row.append(label, text);
+    }
+    const images = new Map();
+    function collect(value) {
+      if (!value || typeof value !== "object") return;
+      if (value.artifactId && value.mimeType?.startsWith("image/"))
+        images.set(value.artifactId, value);
+      for (const item of Object.values(value))
+        if (item && typeof item === "object") collect(item);
+    }
+    collect(event);
+    for (const artifact of images.values()) {
+      const button = document.createElement("button");
+      button.textContent = "View screenshot";
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          const response = await command("history-image", {
+            tabId,
+            runId,
+            artifactId: artifact.artifactId,
+          });
+          if (selected?.id !== tabId || historyRun?.runId !== runId) return;
+          const image = response.history;
+          $("large-screenshot").src =
+            `data:${image.mimeType};base64,${image.data}`;
+          $("image-dialog").showModal();
+        } catch (error) {
+          notice(error.message);
+        } finally {
+          button.disabled = false;
+        }
+      });
+      row.append(button);
+    }
+    return row;
+  }
+  async function refreshHistory(append = false) {
+    $("history-tab-label").textContent = selected?.title || "Choose a tab";
+    if (!connected || !selected || !agent?.historyAvailable) {
+      $("history-status").textContent = !connected
+        ? "Connect the local bridge to view History."
+        : !selected
+          ? "Choose a browser tab."
+          : "Restart the bridge to enable History.";
+      return;
+    }
+    if (historyBusy) {
+      historyReload = true;
+      return;
+    }
+    historyBusy = true;
+    $("history-more").disabled = true;
+    const tabId = selected.id,
+      runId = historyRun?.runId;
+    const offset = append ? historyNext : 0;
+    $("history-status").textContent = "Loading history…";
+    try {
+      const response = await command(
+        runId ? "history-events" : "history-list",
+        { tabId, ...(runId ? { runId } : {}), offset: offset || 0 },
+      );
+      if (
+        selected?.id !== tabId ||
+        historyRun?.runId !== runId ||
+        workspaceView !== "history"
+      )
+        return;
+      const data = response.history;
+      if (runId && data.run) historyRun = data.run;
+      if (!append) $("history-content").replaceChildren();
+      $("history-back").hidden = !runId;
+      const records = runId ? data.events : data.runs;
+      for (const record of records)
+        $("history-content").append(
+          runId ? historyEventRow(record, tabId, runId) : historyRunRow(record),
+        );
+      historyNext = data.nextOffset;
+      $("history-more").hidden = historyNext === null;
+      $("history-status").textContent =
+        agent.historyWarning ||
+        (runId
+          ? `${historyRun.task} · ${historyRun.status}`
+          : records.length || append
+            ? "Runs for this tab, newest first."
+            : "No activity recorded for this tab yet.");
+    } catch (error) {
+      if (selected?.id === tabId)
+        $("history-status").textContent = error.message;
+    } finally {
+      historyBusy = false;
+      $("history-more").disabled = false;
+      if (historyReload) {
+        historyReload = false;
+        if (workspaceView === "history") refreshHistory();
+      }
     }
   }
   function fillSettings() {
@@ -150,6 +328,10 @@
     }
     if (selected) $("target-tab").value = String(selected.id);
     renderControls();
+    if (workspaceView === "history" && historyTab !== selected?.id) {
+      resetHistory();
+      refreshHistory();
+    }
   }
   function renderControls() {
     $("connection").classList.toggle("connected", connected);
@@ -300,6 +482,10 @@
     fillSettings();
     renderControls();
     renderMessages();
+    if (state.historyRevision !== historyRevision) {
+      historyRevision = state.historyRevision;
+      if (workspaceView === "history") refreshHistory();
+    }
   }
   async function sync() {
     const state = await request("tabpilot:ui-state");
@@ -385,6 +571,10 @@
   $("target-tab").addEventListener("change", () => {
     selected = tabs.find((t) => t.id === Number($("target-tab").value));
     renderControls();
+    if (workspaceView === "history") {
+      resetHistory();
+      refreshHistory();
+    }
   });
   for (const id of ["access-toggle", "settings-access"])
     $(id).addEventListener("click", toggleAccess);
@@ -456,7 +646,13 @@
       notice("");
       if (active())
         await command("steer", { runId: agent.runId, text: prompt });
-      else await command("start", { prompt, tabId: selected.id, mode });
+      else
+        await command("start", {
+          prompt,
+          tabId: selected.id,
+          mode,
+          tabTitle: selected.title,
+        });
       $("task").value = "";
       $("task").focus();
     } catch (error) {
@@ -503,12 +699,29 @@
       notice(error.message);
     }
   });
+  $("agent-tab").addEventListener("click", () => showWorkspaceView("agent"));
+  $("history-tab").addEventListener("click", () =>
+    showWorkspaceView("history"),
+  );
+  $("refresh-history").addEventListener("click", () => refreshHistory());
+  $("history-more").addEventListener("click", () => refreshHistory(true));
+  $("history-back").addEventListener("click", () => {
+    historyRun = null;
+    historyNext = null;
+    refreshHistory();
+  });
   $("expand-image").addEventListener("click", () => {
     $("large-screenshot").src = screenshotData;
     $("image-dialog").showModal();
   });
   $("close-image").addEventListener("click", () => $("image-dialog").close());
   chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "tabpilot:history-event") {
+      if (agent) agent.historyRevision = message.revision;
+      historyRevision = message.revision;
+      if (workspaceView === "history") refreshHistory();
+      return;
+    }
     if (message.type === "tabpilot:agent-event") {
       connected = true;
       receive(message.state);

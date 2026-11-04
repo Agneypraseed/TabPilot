@@ -118,7 +118,16 @@
           ><i class="switch-track"></i>
         </button>
       </div>
-      <div class="mode-switch" role="group" aria-label="Agent mode">
+      <nav class="view-tabs" aria-label="Workspace views">
+        <button id="agent-tab" aria-pressed="true">Agent</button>
+        <button id="history-tab" aria-pressed="false">History</button>
+      </nav>
+      <div
+        id="mode-switch"
+        class="mode-switch"
+        role="group"
+        aria-label="Agent mode"
+      >
         <button id="mode-browser" aria-pressed="true">Browser agent</button
         ><button id="mode-computer" aria-pressed="false">Computer use</button>
       </div>
@@ -157,7 +166,38 @@
           </figcaption>
         </figure>
       </main>
-      <footer class="composer-area">
+      <section
+        id="history-view"
+        class="history-view"
+        hidden
+        aria-label="History for selected tab"
+      >
+        <header class="history-header">
+          <div>
+            <h2>Tab history</h2>
+            <p id="history-tab-label"></p>
+          </div>
+          <button
+            id="refresh-history"
+            class="icon-button"
+            aria-label="Refresh history"
+          >
+            <svg><use href="#i-refresh" /></svg>
+          </button>
+        </header>
+        <p class="help">
+          Only this tab. Saved locally, including page observations.
+        </p>
+        <p id="history-status" role="status"></p>
+        <button id="history-back" class="text-button" hidden>
+          ← All runs for this tab
+        </button>
+        <div id="history-content"></div>
+        <button id="history-more" class="secondary full-width" hidden>
+          Load more
+        </button>
+      </section>
+      <footer id="composer-area" class="composer-area">
         <div id="run-controls" hidden>
           <span id="run-status">Working</span><button id="pause">Ⅱ Pause</button
           ><button id="stop">■ Stop</button>
