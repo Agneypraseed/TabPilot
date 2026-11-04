@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TabPilot</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <symbol id="i-tab" viewBox="0 0 24 24">
+        <path
+          d="M6 5h14a2 2 0 0 1 2 2l-1.6 12a2 2 0 0 1-2 1.7H4a2 2 0 0 1-2-2.3L3.5 7A2.5 2.5 0 0 1 6 5Z"
+        />
+        <path
+          d="M8 10h.1m4.4 0h.1m4.4 0h.1"
+          stroke-width="2.8"
+          stroke-linecap="round"
+        />
+      </symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24">
+        <path
+          d="m9.4 3-.5 2-2 .9-1.9-.5-2.1 3.7 1.5 1.5v2.7l-1.5 1.5L5 18.5l2-.5 1.9 1 .5 2h4.3l.5-2 2-1 1.9.5 2.1-3.7-1.5-1.5v-2.7l1.5-1.5-2.1-3.7-2 .5-1.9-.9-.5-2Z"
+        />
+        <circle cx="11.5" cy="12" r="3" />
+      </symbol>
+      <symbol id="i-send" viewBox="0 0 24 24">
+        <path d="m5 4 15 8-15 8 3-8-3-8Zm3 8h12" />
+      </symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="i-back" viewBox="0 0 24 24">
+        <path d="m10 5-7 7 7 7M3 12h18" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M20 10a8 8 0 1 0-2 8M20 4v6h-6" />
+      </symbol>
+    </svg>
+    <header class="header">
+      <button id="back" class="icon-button" aria-label="Back to agent" hidden>
+        <svg><use href="#i-back" /></svg>
+      </button>
+      <svg class="brand-mark"><use href="#i-tab" /></svg>
+      <div class="brand">
+        <h1>TabPilot</h1>
+        <span id="connection"
+          ><i class="dot"></i
+          ><span id="connection-label">Disconnected</span></span
+        >
+      </div>
+      <button
+        id="new-chat"
+        class="icon-button"
+        aria-label="New chat"
+        title="New chat"
+      >
+        <svg><use href="#i-plus" /></svg>
+      </button>
+      <button
+        id="settings-button"
+        class="icon-button"
+        aria-label="Settings"
+        title="Settings"
+      >
+        <svg><use href="#i-settings" /></svg>
+      </button>
+    </header>
+    <p id="notice" role="status" hidden></p>
+    <section id="agent-view" class="agent-view">
+      <div class="target-row">
+        <div class="target-select">
+          <svg><use href="#i-tab" /></svg>
+          <div>
+            <label for="target-tab" class="sr-only">Target tab</label
+            ><select id="target-tab"></select
+            ><span id="target-domain">Choose a browser tab</span>
+          </div>
+        </div>
+        <button
+          id="refresh-tabs"
+          class="icon-button"
+          aria-label="Refresh tabs"
+          title="Refresh tabs"
+        >
+          <svg><use href="#i-refresh" /></svg>
+        </button>
+        <button
+          id="access-toggle"
+          class="access-button"
+          role="switch"
+          aria-checked="false"
+        >
+          <span id="access-label">Access<br />disabled</span
+          ><i class="switch-track"></i>
+        </button>
+      </div>
+      <div class="mode-switch" role="group" aria-label="Agent mode">
+        <button id="mode-browser" aria-pressed="true">Browser agent</button
+        ><button id="mode-computer" aria-pressed="false">Computer use</button>
+      </div>
+      <main id="conversation" tabindex="0" aria-label="Agent conversation">
+        <section id="empty-state">
+          <svg class="empty-mark"><use href="#i-tab" /></svg>
+          <h2>Your browser.<br />Your copilot.</h2>
+          <p>Give your agent a task.<br />Stay in control, every step.</p>
+          <div class="suggestions">
+            <button data-prompt="Summarize the page in this tab.">
+              Summarize this page <span>↗</span></button
+            ><button
+              data-prompt="Find the main links on this page and explain where they lead."
+            >
+              Explore this page <span>↗</span>
+            </button>
+          </div>
+        </section>
+        <div
+          id="messages"
+          aria-live="polite"
+          aria-relevant="additions text"
+        ></div>
+        <figure id="observation" hidden>
+          <button
+            id="expand-image"
+            aria-label="Expand latest browser observation"
+          >
+            <img
+              id="screenshot"
+              alt="Latest browser observation from the agent's selected tab"
+            />
+          </button>
+          <figcaption>
+            Latest observation <span id="observation-time"></span>
+          </figcaption>
+        </figure>
+      </main>
+      <footer class="composer-area">
+        <div id="run-controls" hidden>
+          <span id="run-status">Working</span><button id="pause">Ⅱ Pause</button
+          ><button id="stop">■ Stop</button>
+        </div>
+        <form id="task-form">
+          <label for="task" class="sr-only">Task or new guidance</label
+          ><textarea
+            id="task"
+            placeholder="What should I do next?"
+            rows="2"
+            maxlength="12000"
+          ></textarea
+          ><button id="send" class="primary send-button" aria-label="Send task">
+            <svg><use href="#i-send" /></svg>
+          </button>
+        </form>
+        <button
+          id="model-label"
+          class="model-label"
+          title="Change model in Settings"
+        >
+          Connect your local bridge <span>⌄</span>
+        </button>
+        <p id="composer-hint">Only tabs you enable are shared.</p>
+      </footer>
+    </section>
+    <section id="settings-view" hidden>
+      <h2>Settings</h2>
+      <section class="settings-section">
+        <h3>Connection</h3>
+        <p id="settings-connection" class="connection-description">
+          Start your local bridge to connect.
+        </p>
+        <form id="pair-form">
+          <label for="pair-token">Local pairing token</label>
+          <div class="input-row">
+            <input
+              id="pair-token"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste your pairing token"
+              maxlength="64"
+            /><button id="connect" class="primary">Connect</button>
+          </div>
+        </form>
+        <p class="help">
+          Get your token with <code>npm run cli -- pair</code>.
+        </p>
+        <button id="disconnect" class="text-button" hidden>
+          Disconnect bridge
+        </button>
+      </section>
+      <section class="settings-section">
+        <h3>Tab access</h3>
+        <div class="settings-target">
+          <div>
+            <strong id="settings-tab-name">No tab selected</strong
+            ><span id="settings-tab-domain"></span>
+          </div>
+          <button
+            id="settings-access"
+            class="access-button"
+            role="switch"
+            aria-checked="false"
+            aria-label="Enable selected tab"
+          >
+            <i class="switch-track"></i>
+          </button>
+        </div>
+        <p class="help">Only enabled tabs are available to agents.</p>
+      </section>
+      <form id="settings-form">
+        <section class="settings-section">
+          <h3>Model</h3>
+          <label for="provider">Provider</label
+          ><select id="provider">
+            <option value="openai">OpenAI</option>
+            <option value="meta">Meta</option>
+            <option value="gemini">Gemini</option>
+            <option value="claude">Claude</option>
+            <option value="openai-compatible">OpenAI compatible</option></select
+          ><label for="model">Model</label
+          ><input id="model" required maxlength="150" placeholder="Model ID" />
+          <p id="provider-help" class="help">
+            API keys stay on your local bridge.
+          </p>
+        </section>
+        <section class="settings-section">
+          <h3>Run limits</h3>
+          <div class="field-grid">
+            <div>
+              <label for="max-turns">Max turns</label
+              ><input
+                id="max-turns"
+                type="number"
+                min="1"
+                max="100"
+                required
+                value="30"
+              />
+            </div>
+            <div>
+              <label for="timeout">Timeout</label
+              ><select id="timeout">
+                <option value="60000">1 minute</option>
+                <option value="180000">3 minutes</option>
+                <option value="300000" selected>5 minutes</option>
+                <option value="600000">10 minutes</option>
+                <option value="900000">15 minutes</option>
+              </select>
+            </div>
+          </div>
+        </section>
+        <button id="save-settings" class="primary full-width">
+          Save settings
+        </button>
+        <p class="help">
+          Changes apply to the next run. CLI model settings remain independent.
+        </p>
+      </form>
+    </section>
+    <dialog id="image-dialog">
+      <button id="close-image" class="secondary">Close</button
+      ><img id="large-screenshot" alt="Expanded browser observation" />
+    </dialog>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

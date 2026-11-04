@@ -65,6 +65,7 @@ function requestAgent(method, payload = {}) {
 }
 
 function publishAgentState(state) {
+    if (agentState && state?.revision < agentState.revision) return;
     agentState = state;
     // No panel may be open; losing a UI observer is not a runtime error.
     chrome.runtime.sendMessage?.({ type: "tabpilot:agent-event", state }).catch(() => {});

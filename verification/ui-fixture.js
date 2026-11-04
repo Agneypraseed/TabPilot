@@ -1,0 +1,39 @@
+// Visual QA fixture only. Never included in the extension manifest or its pages.
+(() => {
+    let listener;
+    const event = { addListener() {} };
+    const state = { revision: 1, status: "idle", runId: null, events: [], settings: { provider: "meta", model: "muse-spark-1.3", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }, { id: "openai", configured: true }] };
+    let connected = true, enabled = true;
+    globalThis.chrome = {
+        tabs: { query: async () => [{ id: 12, title: "Google", url: "https://www.google.com/", active: true }], onActivated: event, onUpdated: event, onRemoved: event },
+        storage: { session: { get: async () => ({ "tab:12": enabled }) }, onChanged: event },
+        runtime: { onMessage: { addListener(fn) { listener = fn; } }, sendMessage: async message => {
+            if (message.type === "tabpilot:ui-state") return { connected, agent: state };
+            if (message.type === "tabpilot:access") { enabled = message.enabled; return { ok: true, enabled }; }
+            if (message.type === "tabpilot:connect") { connected = true; return { ok: true }; }
+            if (message.type === "tabpilot:disconnect") { connected = false; return { ok: true }; }
+            if (message.type === "tabpilot:agent") {
+                const { method, payload } = message;
+                if (method === "settings") state.settings = payload;
+                if (method === "clear") { state.events = []; state.status = "idle"; }
+                if (method === "start") {
+                    Object.assign(state, { status: "running", runId: "preview-run", tabId: 12, mode: payload.mode });
+                    state.events.push({ id: crypto.randomUUID(), kind: "user", text: payload.prompt });
+                    for (const [index, tool] of ["browser_snapshot", "browser_fill", "browser_press"].entries()) {
+                        setTimeout(() => {
+                            if (state.status === "stopped") return;
+                            state.events.push({ id: crypto.randomUUID(), kind: "tool", text: tool, tool, phase: "complete", time: Date.now() });
+                            if (index === 2) { state.status = "completed"; state.events.push({ id: crypto.randomUUID(), kind: "assistant", text: "Google results are ready." }); }
+                            state.revision++; listener?.({ type: "tabpilot:agent-event", state });
+                        }, 500 * (index + 1));
+                    }
+                }
+                if (method === "pause") state.status = "paused";
+                if (method === "resume") state.status = "running";
+                if (method === "stop") state.status = "stopped";
+                if (method === "steer") state.events.push({ id: crypto.randomUUID(), kind: "user", text: payload.text });
+                state.revision++; return { ok: true, state };
+            }
+        } }
+    };
+})();

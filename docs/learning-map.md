@@ -48,6 +48,16 @@ A screenshot has its own short-lived ID. Its image pixel dimensions are decoded 
 
 Navigation stays in an already enabled tab. New tabs start disabled, including tabs opened by an agent, and the user must enable them explicitly. Cross-origin iframe DOMs and closed shadow roots may need screenshot-based targeting.
 
+## Side-panel task sessions
+
+`4ed71af` adds the runtime behind the agent UI. `agent-service.mjs` owns run state, safe model preferences, follow-up context, cancellation, and guidance. `agent-browser-session.mjs` wraps the existing MCP client: it restricts panel runs to the selected tab, gates operations when paused, rejects obsolete actions when guidance arrives, and includes actual screenshots in Computer use mode. `agent.mjs` still runs the SDK loop for both terminal and panel callers.
+
+The extension uses `sidepanel.html`, `sidepanel.css`, and `sidepanel.js`. Chrome's sidePanel API keeps the UI open next to the page. `background.js` forwards UI commands over the already authenticated WebSocket; `server.mjs` routes them to the local AgentService. Provider keys never cross that connection. The original `popup.html`/`popup.js` remain as a small learning example but are no longer the toolbar action.
+
+Pause is a checkpoint, not a browser rollback. New guidance received during a model request prevents its now-obsolete tool calls from executing; the next model request includes the guidance. Stop aborts the SDK run and cancels paused work. Tool operations are serialized even if a model proposes several at once. A completed tool can still have side effects after a user presses Stop if Chrome already received it, so the next task observes the page again.
+
+UI tests in `test/sidepanel.test.mjs` exercise the actual DOM controller with simulated Chrome APIs. `verification/ui-preview-server.mjs` serves the same UI with explicitly simulated data for browser layout checks; it never runs a model or connects to the bridge. Runtime tests exercise actual SDK tool loops and authenticated WebSocket state/control messages. Live browser verification is separate.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.

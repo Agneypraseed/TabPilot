@@ -2,7 +2,7 @@
 
 A local browser-control toolkit that lets any tool-capable LLM agent inspect and operate explicitly enabled tabs in your existing Chrome browser.
 
-TabPilot connects an agent to your existing browser through a Chrome extension, a local CLI, and MCP tools. It can inspect page controls, click, type, select options, press keys, scroll, navigate, and take screenshots. The included agent chooses tools, checks the resulting page state, and can use screenshots to interact with canvas or unlabeled controls.
+TabPilot connects an agent to your existing browser through a Chrome extension, a local CLI, and MCP tools. Give the included agent a task in the browser side panel, watch its activity, and steer or pause it as it works. Coding agents can use the same browser controls through CLI or MCP.
 
 ## Run locally
 
@@ -21,7 +21,7 @@ With the server running, open another terminal in this folder:
 npm run cli -- pair
 ```
 
-Copy the displayed pairing token into the TabPilot popup and click **Connect local bridge**. Treat this token as a local credential. The bridge listens only on `127.0.0.1:4311`; its generated configuration stays in the ignored `.tabpilot` folder. Restarting the server creates a new token, so pair again afterward. Reloading the extension also requires reconnecting.
+Click TabPilot's toolbar icon to open its side panel. Open **Settings**, paste the displayed pairing token, and click **Connect**. Treat this token as a local credential. The bridge listens only on `127.0.0.1:4311`; its generated configuration stays in the ignored `.tabpilot` folder. Restarting the server creates a new token, so pair again afterward. Reloading the extension also requires reconnecting.
 
 Open an HTTP or HTTPS website, click TabPilot, and enable access for that tab. List enabled tabs and use an ID from the result:
 
@@ -43,9 +43,22 @@ npm run cli -- help
 
 Screenshots are saved under the ignored `.tabpilot/screenshots` directory unless a new output filename is supplied. Coordinates for pointer actions use pixels in the returned image; screenshots expire for control after 30 seconds and are invalidated by page or viewport changes.
 
-Only explicitly enabled tabs can be read or controlled. Access follows that tab through ordinary HTTP/HTTPS navigation. Disable access to detach the debugger and stop further operations. Closing a tab removes its access state. All new tabs, including ones opened by an agent, start disabled and require the user to enable them. The popup's **Read page** button works without the server.
+Only explicitly enabled tabs can be read or controlled. Access follows that tab through ordinary HTTP/HTTPS navigation. Disable access to detach the debugger and stop further operations. Closing a tab removes its access state. All new tabs, including ones opened by an agent, start disabled and require the user to enable them. Tab access controls work without the server.
 
-The bridge serves one connected extension at a time and serializes operations by rejecting overlapping work on the same tab. Leave it running while using CLI or MCP; reconnect through the popup if disconnected. Page data stays local until an agent/client chooses to send it to a model.
+The bridge serves one connected extension at a time and rejects overlapping work on the same tab. Leave it running while using the side panel, CLI, or MCP; reconnect through Settings if disconnected. Page data stays local until an agent/client chooses to send it to a model.
+
+## Agent side panel
+
+Add your provider key to ignored `.env.local` (see `.env.example`) and restart the bridge to load it. API keys stay on the local bridge. In Settings, choose the provider, model ID, and run limits, then save. The configured provider and model appear below the task composer. These panel preferences are stored in ignored `.tabpilot/agent-settings.json`; they do not change CLI flags or `.env.local`.
+
+Select a web tab and enable access, then describe your task:
+
+- **Browser agent** uses page controls and requests screenshots when useful.
+- **Computer use** brings the selected tab into view and returns fresh screenshot observations to the model and panel after operations. Watch the real page alongside its activity trail; expand the latest observation for a closer look.
+- Send another message while a task is running to steer the next action. Follow-up tasks retain conversation context for the same tab. **New chat** clears that context.
+- **Pause** takes effect between operations; **Resume** continues. **Stop** cancels the run and prevents subsequent actions. Neither can undo an action already sent to Chrome. Disconnecting the extension also stops a panel run.
+
+Panel runs stay restricted to their selected tab. Closing the panel does not stop the local runtime; reopening restores its current state. Conversation and screenshots are held in memory, not saved to disk, and reset when the bridge restarts. Screenshots sent in Computer use mode increase model usage and require a model that accepts images. CLI and MCP remain available independently; avoid directing multiple agents at the same tab at once.
 
 ## MCP
 

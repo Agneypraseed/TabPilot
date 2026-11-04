@@ -189,7 +189,7 @@ async function main() {
     await writeFile(new URL(".tabpilot/bridge.json", import.meta.url),
         JSON.stringify({ url: "http://127.0.0.1:4311", token }), { mode: 0o600 });
     console.log("TabPilot bridge listening on http://127.0.0.1:4311");
-    console.log("Run npm run cli -- pair to get the token, then paste it into the popup.");
+    console.log("Run npm run cli -- pair to get the token, then connect in TabPilot Settings.");
     for (const signal of ["SIGINT", "SIGTERM"]) {
         process.once(signal, () => { void bridge.close(); });
     }

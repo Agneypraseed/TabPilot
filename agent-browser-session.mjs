@@ -35,10 +35,16 @@ export function observedBrowserServer(server, {
         }
         return result;
     };
+    let queue = Promise.resolve();
+    const enqueue = (...args) => {
+        const result = queue.then(() => execute(...args));
+        queue = result.catch(() => {});
+        return result;
+    };
     return new Proxy(server, {
         get(target, property) {
-            if (property === "callToolResult") return execute;
-            if (property === "callTool") return async (...args) => (await execute(...args)).content;
+            if (property === "callToolResult") return enqueue;
+            if (property === "callTool") return async (...args) => (await enqueue(...args)).content;
             const value = Reflect.get(target, property);
             return typeof value === "function" ? value.bind(target) : value;
         }

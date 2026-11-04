@@ -22,16 +22,17 @@ export class AgentService {
         this.runAgent = run;
         this.configureModel = configure;
         this.listeners = new Set();
+        this.revision = 0;
         this.history = [];
         this.conversationTab = null;
         this.state = { status: "idle", runId: null, events: [], screenshot: null };
     }
     get active() { return ["running", "pausing", "paused", "stopping"].includes(this.state.status); }
     snapshot() {
-        return { ...this.state, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
+        return { ...this.state, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
     }
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-    emit() { const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
+    emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
     event(kind, text, extra = {}) {
         this.state.events.push({ id: randomUUID(), kind, text, time: Date.now(), ...extra });
         this.state.events = this.state.events.slice(-160);
