@@ -1,3 +1,5 @@
+importScripts("page-runtime.js");
+
 let bridgeSocket = null;
 let bridgeReady = false;
 
@@ -43,15 +45,8 @@ async function readTabSnapshot(tabId) {
 
     const [frame] = await chrome.scripting.executeScript({
         target: { tabId },
-        func: () => {
-            const text = document.body?.innerText ?? "";
-            return {
-                title: document.title,
-                url: location.href,
-                text: text.slice(0, 20000),
-                truncated: text.length > 20000
-            };
-        }
+        func: tabPilotPage,
+        args: ["snapshot", {}]
     });
 
     // Do not return a snapshot if access was revoked while reading.

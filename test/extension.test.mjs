@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-const backgroundSource = await readFile(new URL("../background.js", import.meta.url), "utf8");
+import { backgroundSource } from "./background-source.mjs";
 const popupSource = await readFile(new URL("../popup.js", import.meta.url), "utf8");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
