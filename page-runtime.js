@@ -91,6 +91,20 @@ function tabPilotPage(operation = "snapshot", args = {}) {
     const state = globalThis[stateKey];
     if (!state || state.document !== document) throw new Error("STALE_REF: take a new snapshot after navigation.");
     const entry = state.nodes.get(args.ref);
+    if (operation === "typing-status") {
+        const el = entry?.element;
+        let focused = !!el?.isConnected && !el.disabled && !el.readOnly && el.getAttribute("aria-disabled") !== "true" &&
+            (el.isContentEditable || signature(el) === entry.signature) &&
+            (el.isContentEditable || (el.matches("input,textarea") && !["file", "checkbox", "radio", "range", "button", "submit"].includes(el.type))) && visible(el) &&
+            (el.ownerDocument.activeElement === el || el.getRootNode().activeElement === el);
+        let win = el?.ownerDocument.defaultView;
+        while (focused && win && win !== window) {
+            const frame = win.frameElement;
+            focused = !!frame && (frame.ownerDocument.activeElement === frame || frame.getRootNode().activeElement === frame);
+            win = win.parent;
+        }
+        return { focused: !!focused };
+    }
     if (!entry || !entry.element.isConnected || signature(entry.element) !== entry.signature) {
         throw new Error("STALE_REF: target changed; take a new snapshot.");
     }

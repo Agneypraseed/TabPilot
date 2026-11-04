@@ -53,6 +53,8 @@ The toolbar popup offers quick access to the agent UI. Open a persistent workspa
 
 Input actions show a blue agent pointer, eased movement, and a click flash on browsers supporting Chrome's compositor overlays. These cues do not intercept input or modify the website DOM. They hide before agent screenshots and fade after inactivity. If a host omits overlay support, browser actions continue without the pointer. **Settings → Open Chrome side panel** also opens the persistent side view in desktop Chrome. Codex's embedded browser currently lacks that native side-panel support.
 
+Text entry is paced: short values appear character by character, while longer values use at most 24 chunks to keep tasks responsive. Typing stops if the original target loses focus or becomes unavailable, so input is not redirected into another field.
+
 Add your provider key to ignored `.env.local` (see `.env.example`) and restart the bridge to load it. API keys stay on the local bridge. In Settings, choose the provider, model ID, and run limits, then save. The configured provider and model appear below the task composer. These panel preferences are stored in ignored `.tabpilot/agent-settings.json`; they do not change CLI flags or `.env.local`.
 
 Select a web tab and enable access, then describe your task:

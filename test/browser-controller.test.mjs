@@ -32,7 +32,7 @@ export function controllerFixture() {
                 if (method === "Runtime.evaluate" && params.expression.includes(')("resolve",')) return { result: { value: {
                     x: 10, y: 20, width: 100, height: 30, editable: true, tag: "input", type: "text"
                 } } };
-                if (method === "Runtime.evaluate" && params.expression.includes(')("focus",')) return { result: { value: { focused: true } } };
+                if (method === "Runtime.evaluate" && (params.expression.includes(')("focus",') || params.expression.includes(')("typing-status",'))) return { result: { value: { focused: true } } };
                 if (method === "Runtime.evaluate") return { result: { value: { title: "Test", url: "https://example.com/",
                     text: "Example", truncated: false, snapshotId: "snapshot-1" } } };
                 return {};
@@ -72,7 +72,7 @@ test("click, fill, key, and scroll use CDP input and return observed state", asy
     assert.equal(mouse[1].params.x, 60);
     assert.equal(mouse[1].params.y, 35);
     await browser.action(12, "fill", { ref: "snapshot-1:e1", text: "Exact user text" });
-    assert.equal(calls.find(call => call.method === "Input.insertText").params.text, "Exact user text");
+    assert.equal(calls.filter(call => call.method === "Input.insertText").map(call => call.params.text).join(""), "Exact user text");
     await browser.action(12, "press", { key: "Enter" });
     assert.ok(calls.some(call => call.method === "Input.dispatchKeyEvent" && call.params.text === "\r"));
     await browser.action(12, "scroll", { deltaY: 500 });
@@ -87,7 +87,7 @@ test("agent pointer animates through compositor overlays without injecting page 
     await browser.action(12, "click", { ref: "snapshot-1:e1" });
     assert.equal(calls.filter(c => c.method === "Overlay.enable").length, 1);
     const frames = calls.filter(c => c.method === "Overlay.highlightQuad");
-    assert.equal(frames.length, 8);
+    assert.equal(frames.length, 12);
     assert.equal(frames.at(-1).params.quad[0], 60);
     assert.equal(frames.at(-1).params.quad[1], 35);
     assert.ok(calls.some(c => c.method === "Overlay.highlightRect"));
@@ -109,6 +109,31 @@ test("unsupported compositor overlays do not prevent normal input", async () => 
     await browser.snapshot(12);
     await browser.action(12, "click", { ref: "snapshot-1:e1" });
     assert.ok(calls.some(c => c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseReleased"));
+    await browser.setAccess(12, false);
+});
+
+test("paced typing preserves Unicode and stops instead of typing into a different focused field", async () => {
+    const { browser, chrome, calls } = controllerFixture();
+    await browser.setAccess(12, true);
+    await browser.snapshot(12);
+    await browser.action(12, "fill", { ref: "snapshot-1:e1", text: "Hi 👋🏽" });
+    assert.equal(calls.filter(c => c.method === "Input.insertText").map(c => c.params.text).join(""), "Hi 👋🏽");
+    calls.length = 0;
+    await browser.typeText(12, "snapshot-1:e1", "x".repeat(2000));
+    const chunks = calls.filter(c => c.method === "Input.insertText");
+    assert.ok(chunks.length <= 24, "long values must not create thousands of delayed input operations");
+    assert.equal(chunks.map(c => c.params.text).join(""), "x".repeat(2000));
+    const send = chrome.debugger.sendCommand;
+    let checks = 0;
+    chrome.debugger.sendCommand = async (...args) => {
+        if (args[1] === "Runtime.evaluate" && args[2].expression.includes(')("typing-status",')) {
+            return { result: { value: { focused: ++checks === 1 } } };
+        }
+        return send(...args);
+    };
+    calls.length = 0;
+    await assert.rejects(browser.action(12, "fill", { ref: "snapshot-1:e1", text: "Stop here" }), /lost focus/);
+    assert.equal(calls.filter(c => c.method === "Input.insertText").map(c => c.params.text).join(""), "S");
     await browser.setAccess(12, false);
 });
 

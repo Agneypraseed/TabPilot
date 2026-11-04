@@ -66,6 +66,8 @@ Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The u
 
 `browser-controller.js` draws an agent pointer using Chrome's compositor Overlay domain before trusted mouse input. Movement is eased over a short sequence of frames, and a click flashes a small highlight. The overlay is not a website element, so it does not intercept clicks, pollute page text, or invalidate DOM refs. Screenshot capture hides the highlight; inactivity and debugger detach clean it up. Hosts without the Overlay domain keep the existing input behavior. The layout chooser and Settings call Chrome's native sidePanel API only after the user chooses that presentation; embedded hosts may still require a separate workspace tab.
 
+`typeText` sends short, Unicode-safe chunks with a 45ms pause, capped at 24 chunks for long values. Before each insertion, `page-runtime.js` checks that the same cached element remains focused, connected, visible, and editable. It does not re-focus a different target after the user takes over. These are trusted input operations, with the existing access check before every command.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.

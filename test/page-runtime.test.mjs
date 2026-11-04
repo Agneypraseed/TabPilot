@@ -42,3 +42,21 @@ test("snapshot traverses open shadow roots and rejects stale or replaced targets
     fixture.document.querySelector("body > button").remove();
     assert.throws(() => fixture.run("resolve", { ref: fresh.elements.find(e => e.name === "Changed").ref }), /STALE_REF/);
 });
+
+test("typing status follows the original editable target and detects focus, visibility, or identity changes", () => {
+    const fixture = page('<input id="name" aria-label="Visitor name"><input id="other">');
+    const input = fixture.document.getElementById("name");
+    Object.defineProperty(fixture.document, "activeElement", { configurable: true, writable: true, value: input });
+    const ref = fixture.run("snapshot").elements.find(e => e.name === "Visitor name").ref;
+    assert.equal(fixture.run("typing-status", { ref }).focused, true);
+    input.value = "Partially typed";
+    assert.equal(fixture.run("typing-status", { ref }).focused, true);
+    fixture.document.activeElement = fixture.document.getElementById("other");
+    assert.equal(fixture.run("typing-status", { ref }).focused, false);
+    fixture.document.activeElement = input;
+    input.hidden = true;
+    assert.equal(fixture.run("typing-status", { ref }).focused, false);
+    input.hidden = false;
+    input.setAttribute("aria-label", "Different purpose");
+    assert.equal(fixture.run("typing-status", { ref }).focused, false);
+});

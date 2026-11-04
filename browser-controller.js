@@ -179,11 +179,23 @@ class TabPilotBrowser {
     async moveVisual(tabId, x, y) {
         const previous = this.visuals.get(tabId);
         const from = previous?.x !== undefined ? { x: previous.x, y: previous.y } : { x: Math.max(0, x - 35), y: Math.max(0, y - 20) };
-        for (let step = 1; step <= 8; step++) {
-            const progress = 1 - Math.pow(1 - step / 8, 3);
+        for (let step = 1; step <= 12; step++) {
+            const progress = 1 - Math.pow(1 - step / 12, 3);
             await this.drawVisual(tabId, from.x + (x - from.x) * progress, from.y + (y - from.y) * progress);
             if (this.visuals.get(tabId)?.unsupported) break;
             await new Promise(resolve => setTimeout(resolve, 20));
+        }
+    }
+
+    async typeText(tabId, ref, text) {
+        const characters = Array.from(text);
+        // Short values look typed; long values finish in at most 24 paced chunks.
+        const chunkSize = Math.max(1, Math.ceil(characters.length / 24));
+        for (let index = 0; index < characters.length; index += chunkSize) {
+            const status = await this.evaluate(tabId, "typing-status", { ref });
+            if (!status?.focused) throw new Error("Typing stopped because the target lost focus or changed. Inspect the page before retrying.");
+            await this.command(tabId, "Input.insertText", { text: characters.slice(index, index + chunkSize).join("") });
+            await new Promise(resolve => setTimeout(resolve, 45));
         }
     }
 
@@ -385,7 +397,7 @@ class TabPilotBrowser {
                     if (!focus?.focused) throw new Error("Could not focus the editable target; take a new snapshot.");
                     await this.key(tabId, globalThis.navigator?.platform?.includes("Mac") ? "Meta+a" : "Control+a");
                     await this.key(tabId, "Backspace");
-                    if (params.text) await this.command(tabId, "Input.insertText", { text: params.text });
+                    if (params.text) await this.typeText(tabId, params.ref, params.text);
                 }
                 if (method === "select") {
                     if (!Array.isArray(params.values) || !params.values.length || params.values.length > 100 || params.values.some(v => typeof v !== "string")) throw new Error("Provide option values.");
