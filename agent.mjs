@@ -4,6 +4,7 @@ import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
+import { parseAgentArguments, agentUsage } from "./agent-options.mjs";
 
 export async function runBrowserAgent(prompt, {
     model = DEFAULT_OPENAI_MODEL,
@@ -36,7 +37,7 @@ export async function runBrowserAgent(prompt, {
             instructions: "Complete the user's task in explicitly enabled browser tabs. " +
                 "Use browser_tabs to discover tab IDs; never invent IDs. Plan a short sequence, act, inspect the returned state, and revise when needed. " +
                 "Start with browser_snapshot. Prefer semantic element refs for clicks, filling fields, and selection. " +
-                "Each new snapshot supersedes old refs. Actions return fresh snapshots: use those new refs for subsequent steps. " +
+                "Each new snapshot supersedes old refs. Actions return fresh snapshots: use those new refs for subsequent steps. Perform only one operation at a time on each tab. " +
                 "Use browser_screenshot when visual information is needed (canvas, layout, unlabeled controls) or to verify a visual result. " +
                 "You receive the screenshot IMAGE as well as metadata. browser_pointer coordinates are image pixels; use that screenshotId and recapture after page changes. " +
                 "Use browser_wait for asynchronous updates. On STALE_REF, TARGET_OBSCURED, or STALE_SCREENSHOT, observe again before retrying. " +
@@ -53,7 +54,7 @@ export async function runBrowserAgent(prompt, {
             mcpServers: [server],
             modelSettings
         });
-        const runner = new Runner({ tracingDisabled: true });
+        const runner = new Runner({ tracingDisabled: true, modelSettings: { parallelToolCalls: false } });
         const toolCalls = [];
         runner.on("agent_tool_start", (_context, _agent, tool) => {
             toolCalls.push(tool.name);
@@ -68,23 +69,18 @@ export async function runBrowserAgent(prompt, {
 }
 
 async function main() {
-    const prompt = process.argv.slice(2).join(" ").trim();
-    if (!prompt) throw new Error('Usage: npm run agent -- "Summarize my enabled tab"');
+    if (process.argv.slice(2).includes("--help")) { console.log(agentUsage); return; }
     const envFile = new URL("./.env.local", import.meta.url);
     if (existsSync(envFile)) loadEnvFile(fileURLToPath(envFile));
-    const configured = await createConfiguredModel();
+    const options = parseAgentArguments(process.argv.slice(2));
+    const configured = await createConfiguredModel({ ...process.env, AGENT_PROVIDER: options.provider, AGENT_MODEL: options.model });
     console.error(`[model] ${configured.provider}/${configured.modelId}`);
     try {
-        const maxTurns = Number(process.env.AGENT_MAX_TURNS || 30);
-        const timeoutMs = Number(process.env.AGENT_TIMEOUT_MS || 300000);
-        if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 100 || !Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 900000) {
-            throw new Error("AGENT_MAX_TURNS must be 1–100 and AGENT_TIMEOUT_MS 1000–900000.");
-        }
-        const result = await runBrowserAgent(prompt, {
+        const result = await runBrowserAgent(options.prompt, {
             model: configured.model,
             modelSettings: configured.modelSettings,
-            maxTurns,
-            signal: AbortSignal.timeout(timeoutMs),
+            maxTurns: options.maxTurns,
+            signal: AbortSignal.timeout(options.timeoutMs),
             onToolCall: (name) => console.error(`[tool] ${name}`)
         });
         console.log(result.answer);
