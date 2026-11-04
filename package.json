@@ -8,6 +8,8 @@
     "cli": "node cli.mjs",
     "mcp": "node mcp.mjs",
     "agent": "node agent.mjs",
+    "practice": "node verification/practice-server.mjs",
+    "verify:meta": "node verification/live-meta.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "engines": {

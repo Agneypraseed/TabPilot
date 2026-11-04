@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>TabPilot Practice</title>
+<style>
+body{font:17px system-ui;max-width:880px;margin:32px auto;padding:0 20px;background:#f6f8fb;color:#182534}
+section{background:white;padding:24px;margin:20px 0;border:1px solid #ccd5e0;border-radius:12px}
+label{display:block;margin:16px 0}input,select,button{font:inherit;padding:10px}button{cursor:pointer}
+canvas{display:block;max-width:100%;border:1px solid #9aacc0}#result{font-weight:600;color:#145a2d}
+</style>
+<h1>TabPilot Practice</h1><p>This local page makes disposable practice orders. No payments, accounts, or external messages.</p>
+<nav><a href="/second">Second page</a> · <a href="/">Practice form</a></nav>
+<section id="form-section"><h2>Practice order</h2>
+<form id="order-form">
+<label>Visitor name <input id="visitor" name="visitor" required autocomplete="off"></label>
+<label>Delivery speed <select id="delivery"><option value="standard">Standard</option><option value="express">Express</option></select></label>
+<label><input id="gift" type="checkbox"> Gift wrap</label>
+<button type="submit">Review practice order</button>
+</form>
+<div id="review" hidden><h3>Review</h3><p id="summary"></p><button id="confirm">Confirm practice order</button></div>
+<p id="result" role="status"></p></section>
+<section><h2>Visual exercise</h2><p>The canvas contains a blue button. Use a screenshot to find and click it.</p>
+<canvas id="visual" width="600" height="170" aria-label="Visual exercise canvas"></canvas><p id="visual-result" role="status">Visual exercise incomplete</p></section>
+<section><h2>Shadow controls</h2><div id="shadow"></div><p id="shadow-result" role="status"></p></section>
+<section><h2>Dialog exercise</h2><button id="dialog">Open practice prompt</button><p id="dialog-result" role="status"></p></section>
+<section style="margin-top:600px"><h2>Bottom of page</h2><button id="bottom">Mark bottom reached</button><p id="bottom-result"></p></section>
+<script>
+const $=id=>document.getElementById(id);
+const context=$('visual').getContext('2d');
+context.fillStyle='#edf2f8';context.fillRect(0,0,600,170);
+context.fillStyle='#1768ca';context.fillRect(160,50,280,70);
+context.fillStyle='white';context.font='bold 22px system-ui';context.textAlign='center';context.fillText('Visual bonus',300,94);
+$('visual').onclick=async event=>{const r=event.target.getBoundingClientRect();const x=(event.clientX-r.x)*600/r.width,y=(event.clientY-r.y)*170/r.height;
+ if(x>=160&&x<=440&&y>=50&&y<=120){context.fillStyle='#168348';context.fillRect(160,50,280,70);context.fillStyle='white';context.fillText('Completed',300,94);
+ $('visual-result').textContent='Visual exercise complete';await fetch('/api/visual',{method:'POST'});}};
+$('order-form').onsubmit=event=>{event.preventDefault();$('summary').textContent=`Name: ${$('visitor').value}. Delivery: ${$('delivery').value}. Gift wrap: ${$('gift').checked?'yes':'no'}.`;$('review').hidden=false;};
+$('confirm').onclick=async()=>{const response=await fetch('/api/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('visitor').value,delivery:$('delivery').value,gift:$('gift').checked})});
+ const result=await response.json();$('result').textContent=`Practice order complete: ${result.id}`;$('confirm').disabled=true;};
+const shadow=$('shadow').attachShadow({mode:'open'});shadow.innerHTML='<button style="font:inherit;padding:10px">Activate shadow control</button>';
+shadow.querySelector('button').onclick=()=>{$('shadow-result').textContent='Shadow control activated';};
+$('dialog').onclick=()=>{$('dialog-result').textContent='Prompt answer: '+prompt('Practice prompt: enter a color');};
+$('bottom').onclick=()=>{$('bottom-result').textContent='Bottom reached';};
+if(location.pathname==='/second'){$('form-section').innerHTML='<h2>Second page loaded</h2><p>Navigation verified.</p>';}
+</script></html>
