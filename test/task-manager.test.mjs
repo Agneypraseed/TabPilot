@@ -5,6 +5,34 @@ import { RunContext } from "@openai/agents";
 import { TaskManager } from "../task-manager.mjs";
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test("stopping coordinator during child persistence cannot launch the new specialist", async () => {
+    let release, blocked = false, childCalls = 0;
+    const barrier = new Promise(resolve => { release = resolve; });
+    const ui = setup(async (_prompt, options) => {
+        if (options.targetTabId !== 12) { childCalls++; return complete(options); }
+        await options.extraTools.find(tool => tool.name === "delegate_research").invoke(new RunContext(), JSON.stringify({ url: "https://example.com/research", task: "Read source" }));
+        return complete(options);
+    }, { browser: async method => method === "tabs" ? [{ id: 12 }] : { tabId: 90, url: "https://example.com/research", enabled: false } });
+    const save = ui.manager.store.upsert;
+    ui.manager.store.upsert = async record => {
+        if (record.role === "research" && record.status === "queued" && !blocked) { blocked = true; await barrier; }
+        return save(record);
+    };
+    ui.manager.approveResearchTab = async () => {};
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create();
+    await until(() => ui.manager.snapshot().requests.length === 1);
+    const request = ui.manager.snapshot().requests[0];
+    await ui.manager.command("human-response", { id: request.id, runId: request.runId, scope: ui.scope, decision: "approve" });
+    await until(() => blocked);
+    const parent = [...ui.manager.records.values()].find(record => !record.parentTaskId);
+    await ui.manager.command("task-cancel", { taskId: parent.id, scope: ui.scope });
+    release();
+    await until(() => !ui.manager.active);
+    assert.equal(childCalls, 0);
+    assert.equal([...ui.manager.records.values()].find(record => record.role === "research").status, "cancelled");
+    await ui.manager.close();
+});
 async function until(check) { for (let i = 0; i < 100; i++) { if (check()) return; await flush(); } assert.fail("Task did not settle"); }
 function setup(run, options = {}) {
     const records = new Map();

@@ -244,6 +244,10 @@ export class TaskManager {
                 session.controller.signal.throwIfAborted();
                 const worker = await this.create({ ...this.input(record), tabId: opened.tabId, tabTitle: "Research specialist", prompt: task,
                     mode: "browser", notBefore: this.now(), repeatEveryMs: null, allowResearch: false, maxStages: Math.min(record.maxStages, 10) }, { parentTaskId: record.id, role: "research" });
+                if (session.controller.signal.aborted) {
+                    await this.cancel(worker);
+                    session.controller.signal.throwIfAborted();
+                }
                 await this.launch(worker);
                 session.event("status", "Research specialist started", { workerId: worker.id, tabId: opened.tabId });
                 return JSON.stringify({ workerId: worker.id, tabId: opened.tabId, instruction: "Use collect_worker_result with this worker ID to receive verified findings." });
