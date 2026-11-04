@@ -65,6 +65,7 @@ function tabPilotPage(operation = "snapshot", args = {}) {
                     bounds: rectangle(el) };
                 if (el.tagName === "INPUT" && ["password", "file"].includes(el.type)) item.value = "[redacted]";
                 else if ("value" in el) item.value = String(el.value).slice(0, 500);
+                if (el.tagName === "A") { item.href = el.href; item.target = el.target || "_self"; }
                 if ("checked" in el) item.checked = el.checked;
                 if (el.tagName === "SELECT") item.options = Array.from(el.options).slice(0, 100)
                     .map(option => ({ value: option.value, label: option.label, selected: option.selected }));

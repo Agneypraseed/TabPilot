@@ -8,5 +8,7 @@ const snapshot = {
 await createTabPilotMcp({
     request: async method => method === "tabs"
         ? [{ id: 12, title: snapshot.title, url: snapshot.url }]
-        : snapshot
+        : method === "screenshot" ? { screenshotId: "test-shot", mimeType: "image/png", width: 1, height: 1,
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP1sAAAAASUVORK5CYII=" }
+        : method === "snapshot" ? snapshot : { action: method, snapshot }
 }).connect(new StdioServerTransport());

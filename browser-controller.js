@@ -95,8 +95,9 @@ class TabPilotBrowser {
     }
 
     serial(tabId, operation) {
-        const previous = this.queues.get(tabId) || Promise.resolve();
-        const task = previous.catch(() => {}).then(async () => { await this.ensureAttached(tabId); return operation(); });
+        // Reject overlapping work rather than executing an old action after its caller timed out.
+        if (this.queues.has(tabId)) return Promise.reject(new Error("TAB_BUSY: wait for the current operation, then observe again."));
+        const task = Promise.resolve().then(async () => { await this.ensureAttached(tabId); return operation(); });
         this.queues.set(tabId, task);
         task.finally(() => { if (this.queues.get(tabId) === task) this.queues.delete(tabId); }).catch(() => {});
         return task;
@@ -299,7 +300,8 @@ class TabPilotBrowser {
                     if (typeof params.text !== "string" || params.text.length > 20000) throw new Error("Text must be a string of at most 20000 characters.");
                     if (!target.editable || target.readOnly || ["file", "checkbox", "radio", "range", "button", "submit"].includes(target.type)) throw new Error("Target does not accept text.");
                     await this.clickPoint(tabId, x, y);
-                    await this.evaluate(tabId, "focus", { ref: params.ref });
+                    const focus = await this.evaluate(tabId, "focus", { ref: params.ref });
+                    if (!focus?.focused) throw new Error("Could not focus the editable target; take a new snapshot.");
                     await this.key(tabId, globalThis.navigator?.platform?.includes("Mac") ? "Meta+a" : "Control+a");
                     await this.key(tabId, "Backspace");
                     if (params.text) await this.command(tabId, "Input.insertText", { text: params.text });
@@ -309,7 +311,11 @@ class TabPilotBrowser {
                     result = await this.evaluate(tabId, "select", { ref: params.ref, values: params.values });
                 }
             } else if (method === "press") {
-                if (params.ref) { await this.resolve(tabId, params.ref); await this.evaluate(tabId, "focus", { ref: params.ref }); }
+                if (params.ref) {
+                    await this.resolve(tabId, params.ref);
+                    const focus = await this.evaluate(tabId, "focus", { ref: params.ref });
+                    if (!focus?.focused) throw new Error("Could not focus the target.");
+                }
                 await this.key(tabId, params.key);
             } else if (method === "scroll") {
                 const deltaY = params.deltaY ?? 600, deltaX = params.deltaX ?? 0;
