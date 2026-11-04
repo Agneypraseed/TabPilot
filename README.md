@@ -62,15 +62,24 @@ Website content is untrusted data. An agent should not treat instructions found 
 
 The optional local agent uses the OpenAI Agents SDK to choose TabPilot MCP tools and answer a browser question. Install dependencies with `npm install`, keep the bridge running, and pair the extension. Enable a tab before starting the agent.
 
-Create an ignored `.env.local` file with `OPENAI_API_KEY` and optionally `AGENT_MODEL` (default `gpt-5-mini`); see `.env.example`. The model must support tool calling. Then run:
+Create an ignored `.env.local` file using `.env.example`. By default the agent uses OpenAI and `gpt-6-luna`. Set `AGENT_PROVIDER`, `AGENT_MODEL`, and the matching key to select another provider. The model must support tool calling. Then run:
 
 ```powershell
 npm run agent -- "Summarize my enabled tab"
 ```
 
-Tool names appear on stderr and the final answer on stdout. The agent can list and read enabled tabs; it cannot click, type, or navigate. Text returned by browser tools is sent to the configured OpenAI model to answer your request. Model response storage and optional SDK tracing are disabled by this runner. Runs stop after at most six model turns or a two-minute timeout, and close their MCP process afterward. API usage is billed by your provider.
+The selected provider/model and tool names appear on stderr; the final answer appears on stdout. The agent can list and read enabled tabs; it cannot click, type, or navigate. Text returned by browser tools is sent to the selected provider to answer your request. Optional SDK tracing is disabled, and the native OpenAI path also disables response storage. Other providers apply their own retention policies. Runs stop after at most six model turns or a two-minute timeout, and close their MCP process afterward. API usage is billed by your provider.
 
-The bridge and MCP tools remain usable with other agents. This included runner currently supports OpenAI; Gemini and Claude adapters are a separate next step and require their respective credentials.
+| AGENT_PROVIDER | Required key | Model / endpoint |
+| --- | --- | --- |
+| `openai` (default) | `OPENAI_API_KEY` | `AGENT_MODEL`, defaults to `gpt-6-luna` |
+| `gemini` | `GOOGLE_GENERATIVE_AI_API_KEY` | Set `AGENT_MODEL` to a Gemini tool-capable model ID |
+| `claude` | `ANTHROPIC_API_KEY` | Set `AGENT_MODEL` to a Claude tool-capable model ID |
+| `openai-compatible` | `COMPATIBLE_API_KEY` | Set `AGENT_MODEL` and `COMPATIBLE_BASE_URL`, including the provider's API path such as `/v1` |
+
+For example, to use Gemini, change `AGENT_PROVIDER` to `gemini`, replace `AGENT_MODEL` with your selected Gemini model ID, and add `GOOGLE_GENERATIVE_AI_API_KEY`. OpenAI keys are not reused for other providers. Compatible endpoints require HTTPS, with HTTP allowed for loopback servers. Compatibility depends on the endpoint supporting Chat Completions tool calls and tool-result messages; an arbitrary model API is not sufficient. Missing credentials and provider errors are reported without switching models automatically.
+
+The bridge and MCP tools remain usable with other agents. Gemini, Claude, and compatible adapters have automated tests using simulated HTTP responses; live provider verification requires your credentials and a tool-capable model available to your account.
 
 ## Verify
 

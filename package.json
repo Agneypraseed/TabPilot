@@ -10,10 +10,17 @@
     "agent": "node agent.mjs",
     "test": "node --test test/*.test.mjs"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.96",
+    "@ai-sdk/google": "4.0.111",
+    "@ai-sdk/openai-compatible": "3.0.84",
     "@modelcontextprotocol/sdk": "1.31.0",
     "@openai/agents": "0.21.0",
+    "@openai/agents-extensions": "0.21.0",
+    "ai": "7.0.162",
     "ws": "8.22.0",
     "zod": "4.6.5"
   }

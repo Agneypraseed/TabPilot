@@ -3,9 +3,11 @@ import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
 
 export async function runBrowserAgent(prompt, {
-    model = "gpt-5-mini",
+    model = DEFAULT_OPENAI_MODEL,
+    modelSettings = { maxTokens: 2000, store: false },
     server = new MCPServerStdio({
         name: "TabPilot",
         command: process.execPath,
@@ -40,7 +42,7 @@ export async function runBrowserAgent(prompt, {
                 "Report tool failures and truncation honestly. You can only read; browser actions are unavailable. " +
                 "Give a concise answer grounded in the returned snapshot.",
             mcpServers: [server],
-            modelSettings: { maxTokens: 2000, store: false }
+            modelSettings
         });
         const runner = new Runner({ tracingDisabled: true });
         const toolCalls = [];
@@ -61,19 +63,23 @@ async function main() {
     if (!prompt) throw new Error('Usage: npm run agent -- "Summarize my enabled tab"');
     const envFile = new URL("./.env.local", import.meta.url);
     if (existsSync(envFile)) loadEnvFile(fileURLToPath(envFile));
-    if (!process.env.OPENAI_API_KEY?.trim()) throw new Error("Set OPENAI_API_KEY in .env.local first.");
-
-    const result = await runBrowserAgent(prompt, {
-        model: process.env.AGENT_MODEL?.trim() || "gpt-5-mini",
-        onToolCall: (name) => console.error(`[tool] ${name}`)
-    });
-    console.log(result.answer);
+    const configured = await createConfiguredModel();
+    console.error(`[model] ${configured.provider}/${configured.modelId}`);
+    try {
+        const result = await runBrowserAgent(prompt, {
+            model: configured.model,
+            modelSettings: configured.modelSettings,
+            onToolCall: (name) => console.error(`[tool] ${name}`)
+        });
+        console.log(result.answer);
+    } finally {
+        await configured.close();
+    }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     main().catch((error) => {
-        const message = String(error.message).replace(/sk-[A-Za-z0-9_-]+/g, "[redacted]");
-        console.error(message);
+        console.error(formatAgentError(error));
         process.exitCode = 1;
     });
 }
