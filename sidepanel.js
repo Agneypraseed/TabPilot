@@ -25,10 +25,27 @@
     historyReload = false,
     historyRevision = -1;
   const active = () =>
-    ["running", "pausing", "paused", "needs-input", "stopping"].includes(
+    ["running", "pausing", "paused", "needs-input", "waiting-for-worker", "stopping"].includes(
       agent?.status,
     );
   const attentionCards = new Map();
+  const taskView = globalThis.TabPilotTaskView ? new globalThis.TabPilotTaskView({ document, command,
+    selected: () => selected, notice, mode: () => mode,
+    viewAgent: async job => {
+      selected = tabs.find(tab => tab.id === job.tabId) || selected;
+      if (!selected || selected.id !== job.tabId) throw new Error("This tab is no longer open. Review and resume on a selected tab instead.");
+      $("target-tab").value = String(selected.id);
+      await command("select-tab", { tabId: selected.id });
+      if (agent.taskId !== job.id && job.runId) {
+        showWorkspaceView("history");
+        historyRun = { runId: job.runId, task: job.prompt, status: job.status, startedAt: job.createdAt };
+        historyNext = null;
+        await refreshHistory();
+        return;
+      }
+      showWorkspaceView("agent");
+    }
+  }) : null;
   function renderAttention(requests = []) {
     const ids = new Set(requests.map((request) => request.id));
     for (const [id, card] of attentionCards)
@@ -52,7 +69,9 @@
       const detail = document.createElement("p");
       detail.className = "help";
       detail.textContent = pending.detail || "";
-      card.append(title, question, detail);
+      const tabLabel = document.createElement("small");
+      tabLabel.textContent = tabs.find(tab => tab.id === pending.tabId)?.title || `Tab ${pending.tabId}`;
+      card.append(tabLabel, title, question, detail);
       let input;
       if (pending.kind === "information") {
         input = document.createElement("textarea");
@@ -172,10 +191,13 @@
   function showWorkspaceView(view) {
     workspaceView = view;
     $("history-view").hidden = view !== "history";
+    $("tasks-view").hidden = view !== "tasks";
     for (const id of ["mode-switch", "conversation", "composer-area"])
       $(id).hidden = view !== "agent";
     $("agent-tab").setAttribute("aria-pressed", String(view === "agent"));
     $("history-tab").setAttribute("aria-pressed", String(view === "history"));
+    $("tasks-tab").setAttribute("aria-pressed", String(view === "tasks"));
+    if (view === "tasks") taskView?.render(agent, connected);
     if (view === "history") {
       if (historyTab !== selected?.id) resetHistory();
       refreshHistory();
@@ -390,7 +412,7 @@
     ]);
     tabs = available.filter((tab) => /^https?:\/\//.test(tab.url || ""));
     const oldId = selected?.id;
-    const desired = active()
+    const desired = active() && !agent?.jobs
       ? agent.tabId
       : preferActive
         ? (initialTarget && initialTab) || available.find((t) => t.active)?.id
@@ -421,6 +443,8 @@
     }
     if (selected) $("target-tab").value = String(selected.id);
     renderControls();
+    if (connected && agent?.jobs && selected && agent.selectedTabId !== selected.id)
+      await command("select-tab", { tabId: selected.id });
     if (workspaceView === "history" && historyTab !== selected?.id) {
       resetHistory();
       refreshHistory();
@@ -436,7 +460,7 @@
       : "Start your local bridge with npm start.";
     $("disconnect").hidden = !connected;
     $("pair-form").hidden = connected;
-    $("target-tab").disabled = active() || !tabs.length;
+    $("target-tab").disabled = (active() && !agent?.jobs) || !tabs.length;
     $("target-domain").textContent = selected
       ? host(selected.url)
       : "Choose a browser tab";
@@ -468,12 +492,13 @@
         pausing: "Pausing after this operation…",
         paused: "Paused · you have control",
         "needs-input": "Waiting for your reply",
+        "waiting-for-worker": "Specialists are working…",
         stopping: "Stopping…",
       }[agent?.status] || "";
     $("pause").textContent = ["paused", "pausing"].includes(agent?.status)
       ? "▶ Resume"
       : "Ⅱ Pause";
-    $("pause").disabled = ["stopping", "needs-input"].includes(agent?.status);
+    $("pause").disabled = ["stopping", "needs-input", "waiting-for-worker"].includes(agent?.status);
     $("stop").disabled = agent?.status === "stopping";
     $("new-chat").disabled = active();
     $("send").disabled =
@@ -509,6 +534,7 @@
         Object.assign(document.createElement("span"), { textContent: "⌄" }),
       );
     } else $("model-label").textContent = "Connect your local bridge ⌄";
+    taskView?.render(agent, connected);
   }
   function renderMessages() {
     const events = agent?.events || [];
@@ -666,8 +692,12 @@
   $("refresh-tabs").addEventListener("click", () =>
     refreshTabs().catch((e) => notice(e.message)),
   );
-  $("target-tab").addEventListener("change", () => {
+  $("target-tab").addEventListener("change", async () => {
     selected = tabs.find((t) => t.id === Number($("target-tab").value));
+    if (connected && agent?.jobs && selected) {
+      try { await command("select-tab", { tabId: selected.id }); }
+      catch (error) { notice(error.message); }
+    }
     renderControls();
     if (workspaceView === "history") {
       resetHistory();
@@ -818,6 +848,7 @@
     }
   });
   $("agent-tab").addEventListener("click", () => showWorkspaceView("agent"));
+  $("tasks-tab").addEventListener("click", () => showWorkspaceView("tasks"));
   $("history-tab").addEventListener("click", () =>
     showWorkspaceView("history"),
   );
@@ -851,7 +882,7 @@
     }
   });
   chrome.tabs.onActivated.addListener(() =>
-    refreshTabs(!active()).catch((e) => notice(e.message)),
+    refreshTabs(agent?.jobs ? true : !active()).catch((e) => notice(e.message)),
   );
   chrome.tabs.onUpdated.addListener((_id, change) => {
     if (change.status === "complete" || change.title)

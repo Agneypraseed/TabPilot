@@ -127,6 +127,7 @@
       </div>
       <nav class="view-tabs" aria-label="Workspace views">
         <button id="agent-tab" aria-pressed="true">Agent</button>
+        <button id="tasks-tab" aria-pressed="false">Tasks</button>
         <button id="history-tab" aria-pressed="false">History</button>
       </nav>
       <div
@@ -203,6 +204,34 @@
         <button id="history-more" class="secondary full-width" hidden>
           Load more
         </button>
+      </section>
+      <section id="tasks-view" class="tasks-view" hidden aria-label="Tasks for selected tab">
+        <h2>Tasks for this tab</h2>
+        <p class="help">Schedules and specialists stay with this tab.</p>
+        <p id="tasks-summary" role="status"></p>
+        <div id="tasks-list"></div>
+        <details class="schedule-details">
+          <summary>Schedule a task</summary>
+          <form id="schedule-form">
+            <label for="schedule-prompt">Task</label>
+            <textarea id="schedule-prompt" rows="3" maxlength="12000" placeholder="What should the agent do?" required></textarea>
+            <label for="schedule-at">Start at <small>(blank means now)</small></label>
+            <input id="schedule-at" type="datetime-local" />
+            <label for="schedule-repeat">Repeat</label>
+            <select id="schedule-repeat">
+              <option value="0">Once</option>
+              <option value="900000">Every 15 minutes</option>
+              <option value="1800000">Every 30 minutes</option>
+              <option value="3600000">Every hour</option>
+              <option value="86400000">Every day</option>
+            </select>
+            <label for="schedule-stages">Stage limit</label>
+            <input id="schedule-stages" type="number" min="1" max="200" value="20" required />
+            <label class="check-label"><input id="schedule-research" type="checkbox" checked /> Allow research specialists (asks for tab access)</label>
+            <button id="schedule-submit" class="primary full-width">Schedule task</button>
+          </form>
+        </details>
+        <p class="help tasks-footnote">Keep Chrome and the local bridge running. Interrupted tasks need review before resuming.</p>
       </section>
       <footer id="composer-area" class="composer-area">
         <div id="run-controls" hidden>
@@ -366,6 +395,7 @@
       ><img id="large-screenshot" alt="Expanded browser observation" />
     </dialog>
     <script src="attention-tone.js"></script>
+    <script src="task-view.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

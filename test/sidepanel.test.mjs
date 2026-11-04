@@ -6,7 +6,36 @@ import { parseHTML } from "linkedom";
 
 const html = await readFile(new URL("../sidepanel.html", import.meta.url), "utf8");
 const source = await readFile(new URL("../sidepanel.js", import.meta.url), "utf8");
+const tasksSource = await readFile(new URL("../task-view.js", import.meta.url), "utf8");
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test("Tasks keeps workers with their parent tab, safely renders prompts, and submits schedule controls", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    Object.assign(ui.agent, { jobs: [
+        { id: "root", tabId: 12, prompt: "Research <img src=x>", status: "running", createdAt: 2, maxStages: 20, stage: 1 },
+        { id: "child", parentTaskId: "root", tabId: 34, prompt: "Read specialist source", status: "needs-input", createdAt: 3, maxStages: 10, stage: 1 },
+        { id: "other", tabId: 34, prompt: "Other private task", status: "queued", createdAt: 1 }
+    ], status: "running", tabId: 12, selectedTabId: 12 });
+    ui.receive(ui.agent);
+    await ui.dispatch("tasks-tab");
+    assert.equal($("tasks-view").hidden, false);
+    assert.match($("tasks-list").textContent, /Research <img src=x>/);
+    assert.match($("tasks-list").textContent, /Read specialist source/);
+    assert.doesNotMatch($("tasks-list").textContent, /Other private task/);
+    assert.equal($("tasks-list").querySelector("img"), null);
+    assert.equal($("target-tab").disabled, false);
+    $("schedule-prompt").value = "Read later";
+    $("schedule-at").value = "";
+    $("schedule-stages").value = "5";
+    $("schedule-repeat").value = "1800000";
+    $("schedule-research").checked = false;
+    await ui.dispatch("schedule-form", "submit");
+    const payload = ui.calls.find(call => call.method === "task-create").payload;
+    assert.equal(payload.tabId, 12);
+    assert.equal(payload.repeatEveryMs, 1800000);
+    assert.equal(payload.maxStages, 5);
+    assert.equal(payload.allowResearch, false);
+    assert.equal($("schedule-prompt").value, "");
+});
 async function panel() {
     const { window, document } = parseHTML(html);
     // linkedom implements selected options but not HTMLSelectElement.value's setter.
@@ -34,7 +63,7 @@ async function panel() {
             return { ok: true };
         } }
     };
-    vm.runInNewContext(source, { chrome, document, window, URL, URLSearchParams, setInterval: () => 1, clearInterval, Date });
+    vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
     return { document, calls, dispatch, agent, chrome, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };

@@ -64,7 +64,32 @@ Select a web tab and enable access, then describe your task:
 - Send another message while a task is running to steer the next action. Follow-up tasks retain conversation context for the same tab. **New chat** clears that context.
 - **Pause** takes effect between operations; **Resume** continues. **Stop** cancels the run and prevents subsequent actions. Neither can undo an action already sent to Chrome. Disconnecting the extension also stops a panel run.
 
-Panel runs stay restricted to their selected tab. Closing the panel does not stop the local runtime; reopening restores its current state. Live conversation context resets when the bridge restarts; saved History remains available. Screenshots sent in Computer use mode increase model usage and require a model that accepts images. CLI and MCP remain available independently; avoid directing multiple agents at the same tab at once.
+Each agent stays restricted to its assigned tab. Closing the panel does not stop the local runtime; reopening restores its current state. Live conversation context resets when the bridge restarts; saved History remains available. Screenshots sent in Computer use mode increase model usage and require a model that accepts images. CLI and MCP remain available independently; avoid directing external agents at a workspace task's tab at the same time.
+
+## Tasks, schedules, and specialists
+
+Open **Tasks** for the selected tab to see its queue, schedules, coordinator, and research specialists. **View agent** opens that agent's activity; older completed runs open their History. Switching tabs lets you inspect another task while work continues. The scheduler permits up to three active agents and one task at a time on each tab.
+
+Expand **Schedule a task**, enter the instruction, choose a start time and optional repeat interval, then schedule it. A blank start time means now. Repeats are scheduled after successful completion, so unfinished tasks do not overlap with another occurrence. Disabled tabs wait for access; keep Chrome and the local bridge running. Tasks due while the bridge is off become eligible when it reconnects, without replaying missed repeat intervals.
+
+An agent records completion only after reporting observed evidence. Turn limits save progress and continue in another stage. The stage limit bounds total continuation; exhausted tasks wait for review instead of being marked complete. **Review and resume** starts with a fresh page check. After a browser restart, **Use selected tab** explicitly rebinds unfinished work to the tab you choose. Interrupted actions are not automatically replayed. Schedules and progress stay local under ignored `.tabpilot/tasks.json`.
+
+With research enabled, the coordinator can open a separate tab and request approval for a research specialist to access that exact page. New tabs remain disabled until you approve. Specialists work independently in their assigned tabs; the coordinator waits for their actual findings before combining them. Waiting for a specialist spends no model tokens. **Stop** on a coordinator also stops its unfinished specialists; it cannot undo dispatched actions or close their tabs. Pause affects the selected agent. Research workers share the configured model and retain their own History.
+
+## Downloads
+
+Ask a workspace agent to download a linked file and give a relative Downloads destination, or ask to choose a location yourself. The approval card shows the URL and destination. **Save As** uses Chrome's native file chooser, where you select a location; the agent can wait for your help with that dialog. Existing files are kept by choosing a unique filename. The agent checks download status before reporting completion and cannot approve dangerous-download warnings or open downloaded files.
+
+CLI and MCP expose the same scoped download controls:
+
+```powershell
+npm run cli -- download 123 https://example.com/report.pdf research/report.pdf
+npm run cli -- download 123 https://example.com/report.pdf --save-as
+npm run cli -- download-status 123 42
+npm run cli -- download-cancel 123 42
+```
+
+Use the actual ID returned by the download command. Status and cancellation require access to the originating tab and a download created through TabPilot. A started transfer is not proof of completion; a tracking warning includes its ID so you can inspect it without starting another transfer. Workspace approval cards apply to the included workspace agent. External CLI/MCP clients control their own approval workflow.
 
 ## Approvals and requests for help
 
@@ -111,6 +136,7 @@ Replace the path with your checkout location. The client launches the MCP proces
 - `browser_open` creates a disabled tab; `browser_close` closes an enabled tab.
 - `browser_screenshot` returns an actual image plus metadata. `browser_pointer` clicks, hovers, or drags using that image's `screenshotId` and pixel coordinates.
 - `browser_dialog` handles a native JavaScript dialog when the browser exposes one.
+- `browser_download`, `browser_download_status`, and `browser_download_cancel` start, inspect, or cancel a download belonging to an enabled tab.
 
 Website content is untrusted data. An agent should not treat instructions found in page text as instructions from the user.
 

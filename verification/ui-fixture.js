@@ -4,6 +4,15 @@
     const event = { addListener() {} };
     const state = { revision: 1, status: "idle", runId: null, events: [], historyAvailable: true, historyRevision: 1, settings: { provider: "meta", model: "muse-spark-1.3", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }, { id: "openai", configured: true }] };
     let connected = true, enabled = true;
+    if (new URLSearchParams(location.search).has("tasks")) {
+        state.jobs = [
+            { id: "coordinator", tabId: 12, prompt: "Compare delivery options", role: "coordinator", status: "waiting-for-worker", stage: 2, maxStages: 20, createdAt: 3, activity: "Waiting for research findings" },
+            { id: "worker-a", parentTaskId: "coordinator", tabId: 34, prompt: "Read delivery policy", role: "research", status: "running", stage: 1, maxStages: 10, createdAt: 4, activity: "Reading the page" },
+            { id: "worker-b", parentTaskId: "coordinator", tabId: 35, prompt: "Check returns policy", role: "research", status: "needs-input", stage: 1, maxStages: 10, createdAt: 5 },
+            { id: "scheduled", tabId: 12, prompt: "Summarize page changes", role: "coordinator", status: "scheduled", stage: 0, maxStages: 20, createdAt: 1, notBefore: Date.now() + 3600000, repeatEveryMs: 1800000 }
+        ];
+        state.selectedTabId = 12;
+    }
     if (new URLSearchParams(location.search).has("attention")) {
         Object.assign(state, { status: "needs-input", runId: "preview-run", tabId: 12, mode: "browser",
             requests: [{ id: "preview-request", runId: "preview-run", kind: "information", question: "Which city should I research?", detail: "I’ll wait for your answer before continuing.", tabId: 12 }] });
@@ -19,6 +28,9 @@
             if (message.type === "tabpilot:test-alert") return { ok: true, played: false };
             if (message.type === "tabpilot:agent") {
                 const { method, payload } = message;
+                if (method === "select-tab") state.selectedTabId = payload.tabId;
+                if (method === "task-create") state.jobs.push({ ...payload, id: crypto.randomUUID(), createdAt: Date.now(), stage: 0, status: "scheduled" });
+                if (method === "task-cancel") state.jobs.find(job => job.id === payload.taskId).status = "cancelled";
                 if (method === "human-response") { state.requests = []; state.status = "idle"; }
                 if (method === "history-list") return { ok: true, history: { runs: [
                     { runId: "fixture-history-1", task: "Search Google for testing my agent", source: "workspace", model: "muse-spark-1.3", status: "completed", startedAt: Date.now() - 120000 },

@@ -84,6 +84,20 @@ Live verification used the user-operated workspace with Meta `muse-spark-1.3` an
 
 `attention-alerts.js` maintains one notification per request and a pending-count badge, with generic desktop text. `attention-tone.js` provides a local two-note sound; `attention-audio.html` is the optional offscreen playback document. The workspace falls back to its own unlocked AudioContext if an embedded host lacks offscreen support. UI cards preserve a draft across state updates and use the exact request/run IDs when responding. History stores the request and reply.
 
+## Persistent tasks and research workers
+
+`task-store.mjs` serializes atomic schedule/progress writes to a local file. Loading a restarted store marks in-flight work interrupted, requiring review rather than replay. `task-manager.mjs` wraps separate AgentService sessions, leases one task per tab, reserves a bounded execution slot before research approval, and rechecks cancellation after persistence. A stable browser profile ID lets the UI display unfinished work after Chrome rotates the history namespace; rebind creates a new task identity on an explicitly chosen tab.
+
+The `complete_task` SDK tool records completion evidence. Ordinary final answers or max-turn errors do not complete a scheduled task: complete SDK tool history carries into another bounded stage. `task-checkpoint.mjs` removes function-tool image blocks from saved checkpoints while retaining tool call/result pairing. Restart resumes from a fresh observation instead of replaying unknown pending calls.
+
+`delegate_research` creates a disabled child tab and waits for a scoped user approval. The private paired WebSocket route checks the enabled source tab and exact approved URL before granting access; no grant-access command exists in CLI/MCP. Each specialist has its own tab/session/history. `collect_worker_result` suspends the coordinator's active budget until the actual child outcome arrives. Stopping the parent cancels unfinished children.
+
+`task-view.js` renders the per-tab queue and parent/worker tree with text-only DOM insertion. Schedules are idle data until due and permission checks pass. Settings remain shared across agents, while prompts, conversations, screenshots, and requests are tied to their assigned tab/run.
+
+## Scoped file downloads
+
+`downloads-controller.js` checks tab access before every operation and tracks Chrome download IDs in session storage. It accepts HTTP(S) URLs, safe relative Downloads paths, or Chrome's Save As chooser; it never accepts dangerous-file warnings or opens files. Once Chrome returns an ID, later tracking errors return that ID with a warning rather than encourage duplicate transfers. CLI/MCP schemas mirror these fixed operations. Workspace approval shows the concrete URL and destination.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.

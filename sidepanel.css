@@ -16,6 +16,33 @@
   color: var(--text);
   background: var(--bg);
 }
+.tasks-view { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 24px; }
+.tasks-view h2 { font-size: 19px; line-height: 1.3; margin-bottom: 5px; }
+#tasks-summary { color: var(--muted); margin: 14px 0 8px; font-size: 12px; }
+.task-row { padding: 15px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.task-heading { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
+.task-heading strong { font-size: 13px; line-height: 1.5; min-width: 0; }
+.task-status { color: #2c3aa4; background: #edf0ff; border-radius: 6px; padding: 2px 7px; font-size: 10px; flex-shrink: 0; max-width: 43%; text-align: center; }
+.task-status.attention { color: #9b3827; background: #ffebe7; }
+.task-row .help { font-size: 11px; margin-top: 4px; }
+.task-activity { color: #555e70; font-size: 12px; margin-top: 6px; white-space: pre-wrap; max-height: 90px; overflow: auto; }
+.task-actions { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+.task-actions button { font-size: 11px; padding: 5px 10px; min-height: 30px; }
+.task-actions button:first-child { background: #f0efff; color: #3046b9; border-color: transparent; }
+.task-workers { margin: 0 0 12px 10px; padding-left: 15px; border-left: 2px solid #c8c2ee; }
+.task-worker { position: relative; padding-top: 10px; border-bottom: 0; min-height: 84px; }
+.task-worker .task-activity { padding-right: 55px; }
+.task-worker .task-actions { position: absolute; bottom: 12px; right: 0; margin: 0; }
+.task-worker::before { content: ""; position: absolute; width: 12px; height: 2px; background: #c8c2ee; top: 20px; left: -15px; }
+.schedule-details { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 16px; }
+.schedule-details summary { font-size: 16px; font-weight: 650; cursor: pointer; }
+#schedule-form { margin-top: 18px; display: grid; gap: 8px; }
+#schedule-form label { font-size: 12px; font-weight: 550; margin-top: 5px; }
+#schedule-form small { color: var(--muted); font-weight: 400; }
+#schedule-form input:not([type="checkbox"]), #schedule-form select, #schedule-form textarea { width: 100%; min-width: 0; padding: 9px 10px; font: inherit; background: white; }
+#schedule-form .check-label { font-size: 11px; font-weight: 400; margin: 8px 0; align-items: flex-start; }
+#schedule-form .primary { margin-top: 5px; }
+.tasks-footnote { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; font-size: 11px; }
 .layout-menu {
   margin: 12px 20px 0;
   padding: 12px;
