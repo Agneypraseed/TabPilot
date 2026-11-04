@@ -136,8 +136,10 @@ class TabPilotBrowser {
     async clickPoint(tabId, x, y, button = "left", clickCount = 1) {
         if (!["left", "right", "middle"].includes(button) || ![1, 2].includes(clickCount)) throw new Error("Invalid click options.");
         await this.mouse(tabId, "mouseMoved", x, y);
-        await this.mouse(tabId, "mousePressed", x, y, { button, clickCount });
-        await this.mouse(tabId, "mouseReleased", x, y, { button, clickCount });
+        for (let count = 1; count <= clickCount; count++) {
+            await this.mouse(tabId, "mousePressed", x, y, { button, clickCount: count });
+            await this.mouse(tabId, "mouseReleased", x, y, { button, clickCount: count });
+        }
     }
 
     async key(tabId, combination) {

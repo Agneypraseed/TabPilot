@@ -138,3 +138,28 @@ test("screenshot pointer coordinates account for device pixel scaling", async ()
     await browser.action(12, "coordinate", { screenshotId: image.screenshotId, x: 500, y: 400 });
     assert.ok(calls.some(call => call.params?.type === "mousePressed" && call.params.x === 400 && call.params.y === 320));
 });
+
+test("hover, drag, and JavaScript dialog handling remain permission gated", async () => {
+    const { browser, calls, handlers } = controllerFixture();
+    await browser.setAccess(12, true);
+    await browser.snapshot(12);
+    await browser.action(12, "hover", { ref: "snapshot-1:e1" });
+    assert.ok(calls.some(call => call.params?.type === "mouseMoved"));
+    const image = await browser.screenshot(12);
+    await browser.action(12, "coordinate", { screenshotId: image.screenshotId, kind: "drag", x: 20, y: 20, toX: 100, toY: 100 });
+    assert.ok(calls.some(call => call.params?.type === "mouseMoved" && call.params.buttons === 1 && call.params.x === 100));
+    handlers.event({ tabId: 12 }, "Page.javascriptDialogOpening", { type: "prompt", message: "Choose a color" });
+    const snapshot = await browser.snapshot(12);
+    assert.equal(snapshot.dialog.type, "prompt");
+    await assert.rejects(browser.action(12, "press", { key: "Enter" }), /dialog is open/);
+    await browser.action(12, "dialog", { accept: true, promptText: "blue" });
+    assert.ok(calls.some(call => call.method === "Page.handleJavaScriptDialog" && call.params.promptText === "blue"));
+});
+
+test("double click dispatches two complete native click sequences", async () => {
+    const { browser, calls } = controllerFixture();
+    await browser.setAccess(12, true);
+    await browser.snapshot(12);
+    await browser.action(12, "click", { ref: "snapshot-1:e1", clickCount: 2 });
+    assert.deepEqual(calls.filter(call => ["mousePressed", "mouseReleased"].includes(call.params?.type)).map(call => call.params.clickCount), [1, 1, 2, 2]);
+});

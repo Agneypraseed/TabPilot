@@ -48,6 +48,7 @@ async function listEnabledTabs() {
         if (enabled !== true || !/^tab:\d+$/.test(key)) continue;
         try {
             const tab = await chrome.tabs.get(Number(key.slice(4)));
+            if ((await chrome.storage.session.get(key))[key] !== true) continue;
             tabs.push({ id: tab.id, title: tab.title ?? "", url: tab.url ?? "" });
         } catch {
             // A tab may close while the list is being built.
