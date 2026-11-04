@@ -82,6 +82,19 @@ function tabPilotPage(operation = "snapshot", args = {}) {
         let win = el.ownerDocument.defaultView;
         while (win !== window) { win.frameElement.scrollIntoView({ block: "center", behavior: "instant" }); win = win.parent; }
         const rect = rectangle(el);
+        const local = el.getBoundingClientRect();
+        const root = el.getRootNode();
+        const hit = root.elementFromPoint?.(local.x + local.width / 2, local.y + local.height / 2) ||
+            el.ownerDocument.elementFromPoint?.(local.x + local.width / 2, local.y + local.height / 2);
+        let target = hit;
+        while (target && target !== el) target = target.parentElement || target.getRootNode()?.host;
+        if (hit && !target) throw new Error("TARGET_OBSCURED: another element covers this target; take a new snapshot or screenshot.");
+        if (el.ownerDocument !== document) {
+            const topHit = document.elementFromPoint?.(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            let frame = el.ownerDocument.defaultView;
+            while (frame.parent !== window) frame = frame.parent;
+            if (topHit && topHit !== frame.frameElement) throw new Error("TARGET_OBSCURED: frame is covered.");
+        }
         return { ...rect, role: role(el), tag: el.tagName.toLowerCase(), type: el.type,
             editable: el.isContentEditable || el.matches("input,textarea"), readOnly: !!el.readOnly };
     }

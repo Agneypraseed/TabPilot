@@ -104,11 +104,101 @@ class TabPilotBrowser {
 
     snapshot(tabId) {
         return this.serial(tabId, async () => {
+            return this.observe(tabId);
+        });
+    }
+
+    async observe(tabId) {
+            if (this.dialogs.has(tabId)) {
+                const tab = await this.permitted(tabId);
+                return { title: tab.title || "", url: tab.url, text: "JavaScript dialog open.", truncated: false,
+                    elements: [], dialog: this.dialogs.get(tabId) };
+            }
             const snapshot = await this.evaluate(tabId, "snapshot");
             await this.permitted(tabId);
             if (!snapshot) throw new Error("The page did not return a snapshot.");
             this.snapshots.set(tabId, snapshot.snapshotId);
-            return { ...snapshot, dialog: this.dialogs.get(tabId) };
+            return snapshot;
+    }
+
+    async resolve(tabId, ref) {
+        const id = this.snapshots.get(tabId);
+        if (typeof ref !== "string" || !id || !ref.startsWith(`${id}:`)) throw new Error("STALE_REF: take a new snapshot and use its refs.");
+        return this.evaluate(tabId, "resolve", { ref });
+    }
+
+    async mouse(tabId, type, x, y, extra = {}) {
+        if (![x, y].every(Number.isFinite) || x < 0 || y < 0) throw new Error("Invalid pointer coordinates.");
+        return this.command(tabId, "Input.dispatchMouseEvent", { type, x, y, ...extra });
+    }
+
+    async clickPoint(tabId, x, y, button = "left", clickCount = 1) {
+        if (!["left", "right", "middle"].includes(button) || ![1, 2].includes(clickCount)) throw new Error("Invalid click options.");
+        await this.mouse(tabId, "mouseMoved", x, y);
+        await this.mouse(tabId, "mousePressed", x, y, { button, clickCount });
+        await this.mouse(tabId, "mouseReleased", x, y, { button, clickCount });
+    }
+
+    async key(tabId, combination) {
+        if (typeof combination !== "string" || combination.length > 80) throw new Error("Invalid key.");
+        const parts = combination.split("+");
+        let key = parts.pop(), modifiers = 0;
+        for (const part of parts) {
+            const bit = { Alt: 1, Control: 2, Ctrl: 2, Meta: 4, Shift: 8 }[part];
+            if (!bit) throw new Error("Unknown key modifier.");
+            modifiers |= bit;
+        }
+        const codes = { Enter: ["Enter", 13], Tab: ["Tab", 9], Escape: ["Escape", 27], Backspace: ["Backspace", 8],
+            Delete: ["Delete", 46], ArrowDown: ["ArrowDown", 40], ArrowUp: ["ArrowUp", 38], ArrowLeft: ["ArrowLeft", 37],
+            ArrowRight: ["ArrowRight", 39], Home: ["Home", 36], End: ["End", 35], PageDown: ["PageDown", 34], PageUp: ["PageUp", 33], Space: ["Space", 32] };
+        let code, virtualKey;
+        if (codes[key]) [code, virtualKey] = codes[key];
+        else if (key.length === 1) { code = /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : /\d/.test(key) ? `Digit${key}` : ""; virtualKey = key.toUpperCase().charCodeAt(0); }
+        else throw new Error("Unsupported key. Use Enter, Tab, Escape, arrows, navigation keys, or a character with modifiers.");
+        if (key === "Space") key = " ";
+        const params = { key, code, windowsVirtualKeyCode: virtualKey, modifiers };
+        const text = !(modifiers & (2 | 4)) ? (key === "Enter" ? "\r" : key.length === 1 ? key : undefined) : undefined;
+        await this.command(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(text ? { text } : {}) });
+        await this.command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
+    }
+
+    action(tabId, method, params = {}) {
+        return this.serial(tabId, async () => {
+            if (this.dialogs.has(tabId)) throw new Error("A JavaScript dialog is open. Use browser_dialog first.");
+            let result = {};
+            if (["click", "hover", "fill", "select"].includes(method)) {
+                const target = await this.resolve(tabId, params.ref);
+                const x = target.x + target.width / 2, y = target.y + target.height / 2;
+                if (method === "click") await this.clickPoint(tabId, x, y, params.button, params.clickCount);
+                if (method === "hover") await this.mouse(tabId, "mouseMoved", x, y);
+                if (method === "fill") {
+                    if (typeof params.text !== "string" || params.text.length > 20000) throw new Error("Text must be a string of at most 20000 characters.");
+                    if (!target.editable || target.readOnly || ["file", "checkbox", "radio", "range", "button", "submit"].includes(target.type)) throw new Error("Target does not accept text.");
+                    await this.clickPoint(tabId, x, y);
+                    await this.evaluate(tabId, "focus", { ref: params.ref });
+                    await this.key(tabId, globalThis.navigator?.platform?.includes("Mac") ? "Meta+a" : "Control+a");
+                    await this.key(tabId, "Backspace");
+                    if (params.text) await this.command(tabId, "Input.insertText", { text: params.text });
+                }
+                if (method === "select") {
+                    if (!Array.isArray(params.values) || !params.values.length || params.values.length > 100 || params.values.some(v => typeof v !== "string")) throw new Error("Provide option values.");
+                    result = await this.evaluate(tabId, "select", { ref: params.ref, values: params.values });
+                }
+            } else if (method === "press") {
+                if (params.ref) { await this.resolve(tabId, params.ref); await this.evaluate(tabId, "focus", { ref: params.ref }); }
+                await this.key(tabId, params.key);
+            } else if (method === "scroll") {
+                const deltaY = params.deltaY ?? 600, deltaX = params.deltaX ?? 0;
+                if (![deltaX, deltaY].every(v => Number.isFinite(v) && Math.abs(v) <= 10000)) throw new Error("Scroll deltas must be within 10000 pixels.");
+                const { cssVisualViewport: viewport } = await this.command(tabId, "Page.getLayoutMetrics");
+                const target = params.ref ? await this.resolve(tabId, params.ref) : { x: 0, y: 0, width: viewport.clientWidth, height: viewport.clientHeight };
+                await this.mouse(tabId, "mouseWheel", target.x + target.width / 2, target.y + target.height / 2, { deltaX, deltaY });
+            } else throw new Error("Unknown browser action.");
+            this.invalidate(tabId);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            // Actions return fresh references and visible state for the next decision.
+            try { return { action: method, ...result, snapshot: await this.observe(tabId) }; }
+            catch (error) { return { action: method, ...result, observationError: error.message, needsSnapshot: true }; }
         });
     }
 }

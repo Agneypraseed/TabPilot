@@ -19,6 +19,11 @@ export function controllerFixture() {
                 calls.push({ target, method, params });
                 if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "root" } } };
                 if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
+                if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1000, clientHeight: 800 } };
+                if (method === "Runtime.evaluate" && params.expression.includes(')("resolve",')) return { result: { value: {
+                    x: 10, y: 20, width: 100, height: 30, editable: true, tag: "input", type: "text"
+                } } };
+                if (method === "Runtime.evaluate" && params.expression.includes(')("focus",')) return { result: { value: { focused: true } } };
                 if (method === "Runtime.evaluate") return { result: { value: { title: "Test", url: "https://example.com/",
                     text: "Example", truncated: false, snapshotId: "snapshot-1" } } };
                 return {};
@@ -43,6 +48,25 @@ test("disabled tabs cannot attach and explicit enable/disable controls the debug
     assert.equal(stored["tab:12"], undefined);
     assert.equal(calls.filter(call => call.method === "detach").length, 1);
     await assert.rejects(browser.snapshot(12), /Access disabled/);
+});
+
+test("click, fill, key, and scroll use CDP input and return observed state", async () => {
+    const { browser, calls } = controllerFixture();
+    await browser.setAccess(12, true);
+    await browser.snapshot(12);
+    const clicked = await browser.action(12, "click", { ref: "snapshot-1:e1" });
+    assert.equal(clicked.snapshot.title, "Test");
+    const mouse = calls.filter(call => call.method === "Input.dispatchMouseEvent");
+    assert.deepEqual(mouse.map(call => call.params.type), ["mouseMoved", "mousePressed", "mouseReleased"]);
+    assert.equal(mouse[1].params.x, 60);
+    assert.equal(mouse[1].params.y, 35);
+    await browser.action(12, "fill", { ref: "snapshot-1:e1", text: "Exact user text" });
+    assert.equal(calls.find(call => call.method === "Input.insertText").params.text, "Exact user text");
+    await browser.action(12, "press", { key: "Enter" });
+    assert.ok(calls.some(call => call.method === "Input.dispatchKeyEvent" && call.params.text === "\r"));
+    await browser.action(12, "scroll", { deltaY: 500 });
+    assert.ok(calls.some(call => call.params?.type === "mouseWheel" && call.params.deltaY === 500));
+    await assert.rejects(browser.action(12, "click", { ref: "old:e1" }), /STALE_REF/);
 });
 
 test("detach revokes permission and navigation invalidates old references", async () => {

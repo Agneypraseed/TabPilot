@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { parseBrowserCommand } from "./commands.mjs";
 
 export async function loadBridgeConfig() {
     let config;
@@ -14,19 +15,20 @@ export async function loadBridgeConfig() {
     return config;
 }
 
-export async function requestBridge(command, tabId) {
-    if (command !== "tabs" && command !== "snapshot") throw new Error("Unknown bridge command.");
+export async function requestBridge(command, tabId, params = {}) {
+    const action = command !== "tabs" && command !== "snapshot" ? parseBrowserCommand({ method: command, tabId, params }) : null;
     if (command === "snapshot" && (!Number.isSafeInteger(tabId) || tabId < 0)) {
         throw new Error("Invalid tab ID.");
     }
     // Reload for each call so an MCP process picks up tokens after server restarts.
     const config = await loadBridgeConfig();
-    const path = command === "tabs" ? "/tabs" : `/snapshot/${tabId}`;
+    const path = action ? "/command" : command === "tabs" ? "/tabs" : `/snapshot/${tabId}`;
     let response;
     try {
         response = await fetch(config.url + path, {
             method: "POST",
-            headers: { Authorization: `Bearer ${config.token}` },
+            headers: { Authorization: `Bearer ${config.token}`, ...(action ? { "Content-Type": "application/json" } : {}) },
+            ...(action ? { body: JSON.stringify(action) } : {}),
             signal: AbortSignal.timeout(12000),
             redirect: "error"
         });

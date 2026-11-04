@@ -87,6 +87,25 @@ test("concurrent CLI requests receive their own extension responses", async (t) 
     assert.deepEqual(await responses[1].json(), { ok: true, data: { tabId: 34 } });
 });
 
+test("action transport validates commands and preserves target arguments", async (t) => {
+    const api = await setup(t);
+    const extension = await pair(api.port);
+    extension.on("message", raw => {
+        const message = JSON.parse(raw);
+        if (message.type !== "request") return;
+        assert.equal(message.method, "fill");
+        assert.equal(message.tabId, 12);
+        assert.deepEqual(message.params, { ref: "snapshot:e1", text: "hello" });
+        extension.send(JSON.stringify({ type: "response", id: message.id, ok: true, data: { action: "fill" } }));
+    });
+    const send = body => fetch(`http://127.0.0.1:${api.port}/command`, { method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal((await send({ method: "Runtime.evaluate", tabId: 12, params: {} })).status, 400);
+    assert.equal((await send({ method: "click", tabId: 12, params: {} })).status, 400);
+    const response = await send({ method: "fill", tabId: 12, params: { ref: "snapshot:e1", text: "hello" } });
+    assert.deepEqual(await response.json(), { ok: true, data: { action: "fill" } });
+});
+
 test("missing responses time out and extension disconnects fail promptly", async (t) => {
     const api = await setup(t, { timeoutMs: 100 });
     const extension = await pair(api.port);

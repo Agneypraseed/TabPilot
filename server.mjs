@@ -4,6 +4,21 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
+import { parseBrowserCommand } from "./commands.mjs";
+
+async function readCommand(request) {
+    const text = await new Promise((resolve, reject) => {
+        let chunks = [], bytes = 0, rejected = false;
+        request.on("data", chunk => {
+            bytes += chunk.length;
+            if (bytes > 65536) { rejected = true; chunks = []; reject(new Error("Request exceeds 64 KB.")); }
+            else if (!rejected) chunks.push(chunk);
+        });
+        request.on("end", () => { if (!rejected) resolve(Buffer.concat(chunks).toString("utf8")); });
+        request.on("error", reject);
+    });
+    return parseBrowserCommand(JSON.parse(text));
+}
 
 export function createBridge({ token, timeoutMs = 10000 }) {
     if (!token) throw new Error("A pairing token is required.");
@@ -22,7 +37,7 @@ export function createBridge({ token, timeoutMs = 10000 }) {
         });
         response.end(JSON.stringify(body));
     };
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
         // Browser pages must not be able to use this local API.
         const expectedHost = `127.0.0.1:${server.address().port}`;
         if (request.headers.host !== expectedHost || request.headers.origin !== undefined) {
@@ -35,6 +50,10 @@ export function createBridge({ token, timeoutMs = 10000 }) {
             return reply(response, 405, { ok: false, error: "Use POST." });
         }
         let command;
+        if (request.url === "/command") {
+            try { command = await readCommand(request); }
+            catch { return reply(response, 400, { ok: false, error: "Invalid browser command or arguments (maximum 64 KB)." }); }
+        }
         if (request.url === "/tabs") command = { method: "tabs" };
         const match = /^\/snapshot\/(\d+)$/.exec(request.url);
         if (match && Number.isSafeInteger(Number(match[1]))) {

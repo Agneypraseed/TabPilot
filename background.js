@@ -86,7 +86,7 @@ function connectBridge(token) {
                 let data;
                 if (message.method === "tabs") data = await listEnabledTabs();
                 else if (message.method === "snapshot") data = await readTabSnapshot(message.tabId);
-                else throw new Error("Unknown bridge command.");
+                else data = await browser.action(message.tabId, message.method, message.params);
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: "response", id: message.id, ok: true, data }));
                 }
