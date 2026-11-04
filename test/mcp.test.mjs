@@ -6,6 +6,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTabPilotMcp } from "../mcp.mjs";
+import { actionParameters, mcpActionName } from "../commands.mjs";
+
+const expectedTools = ["browser_tabs", "browser_snapshot", ...Object.keys(actionParameters).map(mcpActionName)].sort();
 
 async function connect(t, request) {
     const server = createTabPilotMcp({ request });
@@ -17,11 +20,12 @@ async function connect(t, request) {
     return client;
 }
 
-test("MCP advertises exactly the two read-only tools and their input schemas", async (t) => {
+test("MCP advertises read and action tools with distinct annotations and schemas", async (t) => {
     const client = await connect(t, async () => []);
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map(tool => tool.name).sort(), ["browser_snapshot", "browser_tabs"]);
-    assert.ok(tools.every(tool => tool.annotations.readOnlyHint === true));
+    assert.deepEqual(tools.map(tool => tool.name).sort(), expectedTools);
+    assert.equal(tools.find(tool => tool.name === "browser_click").annotations.readOnlyHint, false);
+    assert.equal(tools.find(tool => tool.name === "browser_screenshot").annotations.readOnlyHint, true);
     const snapshot = tools.find(tool => tool.name === "browser_snapshot");
     assert.deepEqual(snapshot.inputSchema.required, ["tabId"]);
     assert.equal(snapshot.inputSchema.properties.tabId.type, "integer");
@@ -73,6 +77,23 @@ test("real MCP process initializes over stdio from another working directory", a
     t.after(() => client.close());
     await client.connect(transport);
     const result = await client.listTools();
-    assert.equal(result.tools.length, 2);
+    assert.equal(result.tools.length, expectedTools.length);
     assert.equal(stderr, "");
+});
+
+test("MCP forwards action parameters and returns actual image content for screenshots", async (t) => {
+    const calls = [];
+    const client = await connect(t, async (method, tabId, params) => {
+        calls.push({ method, tabId, params });
+        return method === "screenshot" ? { screenshotId: "shot", width: 100, height: 80, mimeType: "image/jpeg", data: "dGVzdA==" }
+            : { action: method, snapshot: { title: "Updated" } };
+    });
+    const action = await client.callTool({ name: "browser_fill", arguments: { tabId: 12, ref: "snapshot:e1", text: "hello" } });
+    assert.equal(action.structuredContent.action, "fill");
+    assert.deepEqual(calls[0], { method: "fill", tabId: 12, params: { ref: "snapshot:e1", text: "hello" } });
+    const screenshot = await client.callTool({ name: "browser_screenshot", arguments: { tabId: 12 } });
+    assert.equal(screenshot.content[1].type, "image");
+    assert.equal(screenshot.content[1].data, "dGVzdA==");
+    assert.equal(screenshot.structuredContent.screenshotId, "shot");
+    assert.equal(screenshot.structuredContent.data, undefined);
 });
