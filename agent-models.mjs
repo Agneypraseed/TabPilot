@@ -10,21 +10,23 @@ export async function createConfiguredModel(env = process.env, { fetch: fetchImp
     const provider = env.AGENT_PROVIDER?.trim().toLowerCase() || "openai";
     const keys = {
         openai: "OPENAI_API_KEY",
+        meta: "META_API_KEY",
         gemini: "GOOGLE_GENERATIVE_AI_API_KEY",
         claude: "ANTHROPIC_API_KEY",
         "openai-compatible": "COMPATIBLE_API_KEY"
     };
     if (!Object.hasOwn(keys, provider)) {
-        throw new Error("AGENT_PROVIDER must be openai, gemini, claude, or openai-compatible.");
+        throw new Error("AGENT_PROVIDER must be openai, meta, gemini, claude, or openai-compatible.");
     }
     const modelId = env.AGENT_MODEL?.trim() || (provider === "openai" ? DEFAULT_OPENAI_MODEL : "");
     if (!modelId) throw new Error(`Set AGENT_MODEL for ${provider}; use a tool-capable model ID from that provider.`);
     const apiKey = env[keys[provider]]?.trim();
     if (!apiKey) throw new Error(`Set ${keys[provider]} in .env.local for ${provider}.`);
 
-    if (provider === "openai") {
-        // Keep the native OpenAI path on OpenAI; custom endpoints use a separate key.
-        const client = new OpenAIProvider({ apiKey, baseURL: "https://api.openai.com/v1", useResponses: true });
+    if (provider === "openai" || provider === "meta") {
+        // Each native Responses endpoint uses only its matching provider key.
+        const baseURL = provider === "meta" ? "https://api.meta.ai/v1" : "https://api.openai.com/v1";
+        const client = new OpenAIProvider({ apiKey, baseURL, useResponses: true });
         return { provider, modelId, model: await client.getModel(modelId),
             modelSettings: { maxTokens: 2000, store: false }, close: () => client.close() };
     }

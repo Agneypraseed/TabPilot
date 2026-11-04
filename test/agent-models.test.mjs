@@ -79,6 +79,19 @@ test("native OpenAI defaults to Luna and explicit models override it", async () 
     }
 });
 
+test("Meta uses its own key and an explicit model through the Responses adapter", async () => {
+    await assert.rejects(createConfiguredModel({ AGENT_PROVIDER: "meta", META_API_KEY: "unused-test-key" }), /AGENT_MODEL/);
+    await assert.rejects(createConfiguredModel({ AGENT_PROVIDER: "meta", AGENT_MODEL: "muse-spark-1.3",
+        OPENAI_API_KEY: "wrong-provider-key" }), /META_API_KEY/);
+    const configured = await createConfiguredModel({ AGENT_PROVIDER: "meta", AGENT_MODEL: "muse-spark-1.3",
+        META_API_KEY: "unused-test-key" });
+    assert.equal(configured.provider, "meta");
+    assert.equal(configured.modelId, "muse-spark-1.3");
+    assert.equal(configured.modelSettings.store, false);
+    assert.equal(typeof configured.model.getResponse, "function");
+    await configured.close();
+});
+
 test("unavailable provider models fail clearly without retrying or switching providers", async () => {
     for (const provider of Object.keys(keyNames)) {
         let requests = 0;

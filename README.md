@@ -68,11 +68,12 @@ Create an ignored `.env.local` file using `.env.example`. By default the agent u
 npm run agent -- "Summarize my enabled tab"
 ```
 
-The selected provider/model and tool names appear on stderr; the final answer appears on stdout. The agent can list and read enabled tabs; it cannot click, type, or navigate. Text returned by browser tools is sent to the selected provider to answer your request. Optional SDK tracing is disabled, and the native OpenAI path also disables response storage. Other providers apply their own retention policies. Runs stop after at most six model turns or a two-minute timeout, and close their MCP process afterward. API usage is billed by your provider.
+The selected provider/model and tool names appear on stderr; the final answer appears on stdout. The agent can list and read enabled tabs; it cannot click, type, or navigate. Text returned by browser tools is sent to the selected provider to answer your request. Optional SDK tracing is disabled. Native OpenAI and Meta requests set response storage to false; each provider's retention policies still apply. Runs stop after at most six model turns or a two-minute timeout, and close their MCP process afterward. API usage is billed by your provider.
 
 | AGENT_PROVIDER | Required key | Model / endpoint |
 | --- | --- | --- |
 | `openai` (default) | `OPENAI_API_KEY` | `AGENT_MODEL`, defaults to `gpt-6-luna` |
+| `meta` | `META_API_KEY` | Set `AGENT_MODEL`, for example `muse-spark-1.3`; uses Meta's Responses API at `https://api.meta.ai/v1` |
 | `gemini` | `GOOGLE_GENERATIVE_AI_API_KEY` | Set `AGENT_MODEL` to a Gemini tool-capable model ID |
 | `claude` | `ANTHROPIC_API_KEY` | Set `AGENT_MODEL` to a Claude tool-capable model ID |
 | `openai-compatible` | `COMPATIBLE_API_KEY` | Set `AGENT_MODEL` and `COMPATIBLE_BASE_URL`, including the provider's API path such as `/v1` |
