@@ -27,7 +27,7 @@ export function controllerFixture() {
                 if (method === "Runtime.evaluate" && params.expression.includes(')("status",')) return { result: { value: { ready: true, matches: true } } };
                 if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
                 if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { clientWidth: 1000, clientHeight: 800 } };
-                if (method === "Page.captureScreenshot") return { data: "test-image-base64" };
+                if (method === "Page.captureScreenshot") return { data: Buffer.from([255,216,255,192,0,11,8,3,32,3,232,1,1,0,0,255,217]).toString("base64") };
                 if (method === "Runtime.evaluate" && params.expression.includes(')("fingerprint",')) return { result: { value: { id: "page-1", revision: 1 } } };
                 if (method === "Runtime.evaluate" && params.expression.includes(')("resolve",')) return { result: { value: {
                     x: 10, y: 20, width: 100, height: 30, editable: true, tag: "input", type: "text"
@@ -39,7 +39,7 @@ export function controllerFixture() {
             }
         }
     };
-    const context = vm.createContext({ URL, setTimeout, clearTimeout, crypto: globalThis.crypto });
+    const context = vm.createContext({ URL, setTimeout, clearTimeout, atob, crypto: globalThis.crypto });
     vm.runInContext(source, context);
     const Browser = vm.runInContext("TabPilotBrowser", context);
     return { browser: new Browser(chrome, () => {}), chrome, stored, calls, handlers };
@@ -51,7 +51,9 @@ test("disabled tabs cannot attach and explicit enable/disable controls the debug
     assert.equal(calls.length, 0);
     await browser.setAccess(12, true);
     assert.equal(stored["tab:12"], true);
-    await Promise.all([browser.snapshot(12), browser.snapshot(12)]);
+    const simultaneous = await Promise.allSettled([browser.snapshot(12), browser.snapshot(12)]);
+    assert.equal(simultaneous.filter(result => result.status === "fulfilled").length, 1);
+    assert.match(simultaneous.find(result => result.status === "rejected").reason.message, /TAB_BUSY/);
     assert.equal(calls.filter(call => call.method === "attach").length, 1);
     await browser.setAccess(12, false);
     assert.equal(stored["tab:12"], undefined);
@@ -123,4 +125,16 @@ test("screenshots are bound to enabled tabs and stale coordinates are rejected",
     const fresh = await browser.screenshot(12);
     handlers.event({ tabId: 12 }, "Page.frameNavigated", {});
     await assert.rejects(browser.action(12, "coordinate", { screenshotId: fresh.screenshotId, x: 40, y: 50 }), /STALE_SCREENSHOT/);
+});
+
+test("screenshot pointer coordinates account for device pixel scaling", async () => {
+    const { browser, chrome, calls } = controllerFixture();
+    const send = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = async (target, method, params) => method === "Page.getLayoutMetrics"
+        ? { cssVisualViewport: { clientWidth: 800, clientHeight: 640 } } : send(target, method, params);
+    await browser.setAccess(12, true);
+    const image = await browser.screenshot(12);
+    assert.equal(image.width, 1000);
+    await browser.action(12, "coordinate", { screenshotId: image.screenshotId, x: 500, y: 400 });
+    assert.ok(calls.some(call => call.params?.type === "mousePressed" && call.params.x === 400 && call.params.y === 320));
 });

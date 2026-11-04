@@ -44,9 +44,18 @@ function tabPilotPage(operation = "snapshot", args = {}) {
         const snapshotId = crypto.randomUUID();
         const nodes = new Map(), elements = [], extraText = [], frames = [];
         let total = 0;
+        const shadowText = root => {
+            const walker = document.createTreeWalker(root, 4), text = [];
+            let node;
+            while ((node = walker.nextNode())) {
+                const parent = node.parentElement || root.host;
+                if (parent && !parent.closest("script,style,noscript") && visible(parent)) text.push(node.textContent);
+            }
+            return text.join(" ").replace(/\s+/g, " ").trim();
+        };
         const visit = root => {
             for (const el of root.querySelectorAll("*")) {
-                if (el.shadowRoot) { extraText.push(el.shadowRoot.textContent || ""); visit(el.shadowRoot); }
+                if (el.shadowRoot) { extraText.push(shadowText(el.shadowRoot)); visit(el.shadowRoot); }
                 if (el.tagName === "IFRAME" && visible(el)) {
                     try {
                         if (!el.contentDocument) throw new Error();

@@ -206,11 +206,32 @@ class TabPilotBrowser {
             await this.permitted(tabId);
             if (typeof image.data !== "string" || image.data.length > 6 * 1024 * 1024) throw new Error("Screenshot exceeds the supported size.");
             const screenshotId = crypto.randomUUID();
-            const width = Math.round(viewport.clientWidth * scale), height = Math.round(viewport.clientHeight * scale);
-            this.screenshots.set(tabId, { screenshotId, viewport, fingerprint: after, scale, width, height, time: Date.now() });
+            const { width, height } = this.jpegDimensions(image.data);
+            this.screenshots.set(tabId, { screenshotId, viewport, fingerprint: after,
+                scaleX: width / viewport.clientWidth, scaleY: height / viewport.clientHeight, width, height, time: Date.now() });
             return { screenshotId, mimeType: "image/jpeg", data: image.data, width, height,
                 coordinateSpace: "image pixels", viewport: { width: viewport.clientWidth, height: viewport.clientHeight } };
         });
+    }
+
+    jpegDimensions(data) {
+        const bytes = Uint8Array.from(atob(data), char => char.charCodeAt(0));
+        if (bytes[0] !== 255 || bytes[1] !== 216) throw new Error("Screenshot is not a JPEG.");
+        let offset = 2;
+        while (offset + 4 < bytes.length) {
+            if (bytes[offset] !== 255) throw new Error("Invalid JPEG marker.");
+            const marker = bytes[offset + 1]; offset += 2;
+            const length = (bytes[offset] << 8) | bytes[offset + 1];
+            if (length < 2 || offset + length > bytes.length) break;
+            if ([192, 193, 194, 195, 197, 198, 199, 201, 202, 203, 205, 206, 207].includes(marker)) {
+                const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+                const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+                if (!width || !height) break;
+                return { width, height };
+            }
+            offset += length;
+        }
+        throw new Error("Could not read screenshot dimensions.");
     }
 
     async pointer(tabId, params) {
@@ -226,7 +247,7 @@ class TabPilotBrowser {
         }
         const point = (x, y) => {
             if (![x, y].every(Number.isFinite) || x < 0 || y < 0 || x >= screenshot.width || y >= screenshot.height) throw new Error("Coordinates must be inside the screenshot image.");
-            return { x: x / screenshot.scale, y: y / screenshot.scale };
+            return { x: x / screenshot.scaleX, y: y / screenshot.scaleY };
         };
         const from = point(params.x, params.y);
         if (params.kind === "hover") return this.mouse(tabId, "mouseMoved", from.x, from.y);
