@@ -35,7 +35,7 @@ async function panel() {
     vm.runInNewContext(source, { chrome, document, window, URL, URLSearchParams, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
-    return { document, calls, dispatch, agent, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
+    return { document, calls, dispatch, agent, chrome, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
 }
 
 test("side panel enables selected tab, submits task with mode and renders untrusted text safely", async () => {
@@ -77,9 +77,23 @@ test("panel settings and pause/stop controls route to agent service; reconnect s
 test("workspace falls back to an extension tab when the browser cannot create windows", async () => {
     const ui = await panel();
     await ui.dispatch("open-workspace");
+    assert.equal(ui.document.getElementById("layout-menu").hidden, false);
+    assert.equal(ui.calls.some(c => c.createdTab), false, "choosing layout must not silently open a new tab");
+    await ui.dispatch("open-window");
     const created = ui.calls.find(c => c.createdTab).createdTab;
-    assert.equal(created.url, "chrome-extension://test/sidepanel.html?window=7&tab=12");
+    assert.equal(created.url, "chrome-extension://test/sidepanel.html?window=7&tab=12&layout=tab");
     assert.equal(created.active, true);
+});
+
+test("native side panel uses the target window and unsupported hosts get a clear explanation", async () => {
+    const ui = await panel();
+    let opened;
+    ui.chrome.sidePanel = { open: async options => { opened = options; } };
+    await ui.dispatch("open-side-panel");
+    assert.equal(opened.windowId, 7);
+    delete ui.chrome.sidePanel;
+    await ui.dispatch("open-side-panel-top");
+    assert.match(ui.document.getElementById("notice").textContent, /desktop Chrome/);
 });
 
 test("a restarted bridge replaces old high-revision state instead of appearing permanently stuck", async () => {

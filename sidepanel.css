@@ -16,6 +16,20 @@
   color: var(--text);
   background: var(--bg);
 }
+.layout-menu {
+  margin: 12px 20px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f8f9fc;
+  display: grid;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.layout-menu button {
+  text-align: left;
+  font-size: 12px;
+}
 * {
   box-sizing: border-box;
 }

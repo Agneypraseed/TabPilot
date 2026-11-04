@@ -9,13 +9,15 @@ class TabPilotBrowser {
         this.snapshots = new Map();
         this.screenshots = new Map();
         this.dialogs = new Map();
+        this.visuals = new Map();
         chromeApi.debugger.onDetach.addListener(source => {
+            this.forgetVisual(source.tabId);
             this.attached.delete(source.tabId);
             this.invalidate(source.tabId);
             void chromeApi.storage.session.remove(`tab:${source.tabId}`);
         });
         chromeApi.debugger.onEvent.addListener((source, method, params) => {
-            if (method === "Page.frameNavigated" || method === "Page.navigatedWithinDocument") this.invalidate(source.tabId);
+            if (method === "Page.frameNavigated" || method === "Page.navigatedWithinDocument") { this.invalidate(source.tabId); this.forgetVisual(source.tabId); }
             if (method === "Page.javascriptDialogOpening") this.dialogs.set(source.tabId, { type: params.type, message: params.message });
             if (method === "Page.javascriptDialogClosed") this.dialogs.delete(source.tabId);
         });
@@ -53,6 +55,7 @@ class TabPilotBrowser {
     }
 
     async detach(tabId) {
+        this.forgetVisual(tabId);
         if (this.attached.delete(tabId)) await this.chrome.debugger.detach({ tabId }).catch(() => {});
         this.invalidate(tabId);
         this.dialogs.delete(tabId);
@@ -130,7 +133,58 @@ class TabPilotBrowser {
 
     async mouse(tabId, type, x, y, extra = {}) {
         if (![x, y].every(Number.isFinite) || x < 0 || y < 0) throw new Error("Invalid pointer coordinates.");
+        if (type === "mouseMoved") {
+            if (extra.buttons) { await this.drawVisual(tabId, x, y); await new Promise(resolve => setTimeout(resolve, 20)); }
+            else await this.moveVisual(tabId, x, y);
+        }
+        if (type === "mousePressed") await this.drawVisual(tabId, x, y, true);
         return this.command(tabId, "Input.dispatchMouseEvent", { type, x, y, ...extra });
+    }
+
+    forgetVisual(tabId) {
+        if (this.visuals.get(tabId)?.timer) clearTimeout(this.visuals.get(tabId).timer);
+        this.visuals.delete(tabId);
+    }
+
+    async drawVisual(tabId, x, y, pressed = false) {
+        let visual = this.visuals.get(tabId);
+        if (visual?.unsupported) return;
+        try {
+            if (!visual) {
+                await this.command(tabId, "DOM.enable");
+                await this.command(tabId, "Overlay.enable");
+                visual = {};
+                this.visuals.set(tabId, visual);
+            }
+            clearTimeout(visual.timer);
+            // Chrome's compositor overlay never enters the page DOM, intercepts
+            // clicks, or invalidates element refs / screenshot fingerprints.
+            if (pressed) await this.command(tabId, "Overlay.highlightRect", {
+                x: Math.max(0, Math.round(x - 11)), y: Math.max(0, Math.round(y - 11)), width: 22, height: 22,
+                color: { r: 52, g: 89, b: 238, a: 0.3 }, outlineColor: { r: 52, g: 89, b: 238, a: 1 }
+            });
+            else await this.command(tabId, "Overlay.highlightQuad", {
+                quad: [x, y, x + 5, y + 20, x + 9, y + 11, x + 20, y + 7],
+                color: { r: 52, g: 89, b: 238, a: 1 }, outlineColor: { r: 255, g: 255, b: 255, a: 1 }
+            });
+            visual.x = x; visual.y = y;
+            visual.timer = setTimeout(() => { void this.command(tabId, "Overlay.hideHighlight").catch(() => {}); }, 1200);
+        } catch {
+            // Some embedded hosts omit Overlay. Input still works there.
+            this.forgetVisual(tabId);
+            if (this.attached.has(tabId)) this.visuals.set(tabId, { unsupported: true });
+        }
+    }
+
+    async moveVisual(tabId, x, y) {
+        const previous = this.visuals.get(tabId);
+        const from = previous?.x !== undefined ? { x: previous.x, y: previous.y } : { x: Math.max(0, x - 35), y: Math.max(0, y - 20) };
+        for (let step = 1; step <= 8; step++) {
+            const progress = 1 - Math.pow(1 - step / 8, 3);
+            await this.drawVisual(tabId, from.x + (x - from.x) * progress, from.y + (y - from.y) * progress);
+            if (this.visuals.get(tabId)?.unsupported) break;
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
     }
 
     async clickPoint(tabId, x, y, button = "left", clickCount = 1) {
@@ -138,6 +192,7 @@ class TabPilotBrowser {
         await this.mouse(tabId, "mouseMoved", x, y);
         for (let count = 1; count <= clickCount; count++) {
             await this.mouse(tabId, "mousePressed", x, y, { button, clickCount: count });
+            if (!this.visuals.get(tabId)?.unsupported) await new Promise(resolve => setTimeout(resolve, 110));
             await this.mouse(tabId, "mouseReleased", x, y, { button, clickCount: count });
         }
     }
@@ -200,6 +255,9 @@ class TabPilotBrowser {
             const { cssVisualViewport: viewport } = await this.command(tabId, "Page.getLayoutMetrics");
             const scale = Math.min(1, 1400 / viewport.clientWidth);
             const before = await this.evaluate(tabId, "fingerprint");
+            if (this.visuals.get(tabId) && !this.visuals.get(tabId).unsupported) {
+                await this.command(tabId, "Overlay.hideHighlight").catch(() => {});
+            }
             const image = await this.command(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 70, fromSurface: true,
                 captureBeyondViewport: false, clip: { x: viewport.pageX, y: viewport.pageY,
                     width: viewport.clientWidth, height: viewport.clientHeight, scale } });

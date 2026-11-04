@@ -80,6 +80,38 @@ test("click, fill, key, and scroll use CDP input and return observed state", asy
     await assert.rejects(browser.action(12, "click", { ref: "old:e1" }), /STALE_REF/);
 });
 
+test("agent pointer animates through compositor overlays without injecting page DOM and hides for screenshots", async () => {
+    const { browser, calls } = controllerFixture();
+    await browser.setAccess(12, true);
+    await browser.snapshot(12);
+    await browser.action(12, "click", { ref: "snapshot-1:e1" });
+    assert.equal(calls.filter(c => c.method === "Overlay.enable").length, 1);
+    const frames = calls.filter(c => c.method === "Overlay.highlightQuad");
+    assert.equal(frames.length, 8);
+    assert.equal(frames.at(-1).params.quad[0], 60);
+    assert.equal(frames.at(-1).params.quad[1], 35);
+    assert.ok(calls.some(c => c.method === "Overlay.highlightRect"));
+    await browser.screenshot(12);
+    const capture = calls.findIndex(c => c.method === "Page.captureScreenshot");
+    assert.ok(calls.slice(0, capture).some(c => c.method === "Overlay.hideHighlight"));
+    await browser.setAccess(12, false);
+    assert.equal(browser.visuals.has(12), false);
+});
+
+test("unsupported compositor overlays do not prevent normal input", async () => {
+    const { browser, chrome, calls } = controllerFixture();
+    const send = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = async (...args) => {
+        if (args[1] === "Overlay.enable") throw new Error("Unsupported domain");
+        return send(...args);
+    };
+    await browser.setAccess(12, true);
+    await browser.snapshot(12);
+    await browser.action(12, "click", { ref: "snapshot-1:e1" });
+    assert.ok(calls.some(c => c.method === "Input.dispatchMouseEvent" && c.params.type === "mouseReleased"));
+    await browser.setAccess(12, false);
+});
+
 test("detach revokes permission and navigation invalidates old references", async () => {
     const { browser, stored, handlers } = controllerFixture();
     await browser.setAccess(12, true);

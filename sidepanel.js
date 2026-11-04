@@ -289,7 +289,12 @@
     }
   }
   function receive(state) {
-    if (agent && state.sessionId === agent.sessionId && state.revision < agent.revision) return;
+    if (
+      agent &&
+      state.sessionId === agent.sessionId &&
+      state.revision < agent.revision
+    )
+      return;
     agent = state;
     if (active()) mode = state.mode;
     fillSettings();
@@ -327,6 +332,9 @@
     showSettings($("settings-view").hidden),
   );
   $("open-workspace").addEventListener("click", async () => {
+    $("layout-menu").hidden = !$("layout-menu").hidden;
+  });
+  $("open-window").addEventListener("click", async () => {
     try {
       const query = new URLSearchParams();
       if (selected?.windowId !== undefined)
@@ -342,12 +350,33 @@
           height: 880,
         });
       } catch {
-        await chrome.tabs.create({ url, active: true });
+        query.set("layout", "tab");
+        await chrome.tabs.create({
+          url: chrome.runtime.getURL(`sidepanel.html?${query}`),
+          active: true,
+        });
       }
     } catch (error) {
       notice(error.message);
     }
   });
+  async function openSidePanel() {
+    try {
+      if (!chrome.sidePanel?.open || selected?.windowId === undefined)
+        throw new Error(
+          "This browser cannot open Chrome side panels. Use desktop Chrome to keep TabPilot beside the page.",
+        );
+      await chrome.sidePanel.open({ windowId: selected.windowId });
+      notice(
+        "Side panel requested. If your browser reports it is unsupported, use TabPilot in desktop Chrome.",
+        true,
+      );
+    } catch (error) {
+      notice(error.message);
+    }
+  }
+  $("open-side-panel").addEventListener("click", openSidePanel);
+  $("open-side-panel-top").addEventListener("click", openSidePanel);
   $("model-label").addEventListener("click", () => showSettings(true));
   $("back").addEventListener("click", () => showSettings(false));
   $("refresh-tabs").addEventListener("click", () =>
@@ -506,6 +535,10 @@
     2000,
   );
   window.addEventListener("unload", () => clearInterval(poll));
+  if (params.get("layout") === "tab")
+    notice(
+      "This browser opened a workspace tab. Desktop Chrome also supports keeping TabPilot beside the page.",
+    );
   Promise.all([sync(), refreshTabs(true)]).catch((error) =>
     notice(error.message),
   );

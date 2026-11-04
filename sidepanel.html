@@ -52,8 +52,8 @@
       <button
         id="open-workspace"
         class="icon-button"
-        aria-label="Open persistent workspace"
-        title="Open persistent workspace"
+        aria-label="Choose panel layout"
+        title="Choose panel layout"
       >
         ↗
       </button>
@@ -74,6 +74,21 @@
         <svg><use href="#i-settings" /></svg>
       </button>
     </header>
+    <section
+      id="layout-menu"
+      class="layout-menu"
+      hidden
+      aria-label="Panel layout"
+    >
+      <button id="open-side-panel-top" type="button">
+        Open beside page in Chrome
+      </button>
+      <button id="open-window" type="button">Open separate workspace</button>
+      <p class="help">
+        Codex’s embedded browser cannot show Chrome side panels. Its workspace
+        opens as a tab.
+      </p>
+    </section>
     <p id="notice" role="status" hidden></p>
     <section id="agent-view" class="agent-view">
       <div class="target-row">
@@ -171,6 +186,16 @@
     </section>
     <section id="settings-view" hidden>
       <h2>Settings</h2>
+      <section class="settings-section">
+        <h3>Keep TabPilot beside the page</h3>
+        <button id="open-side-panel" class="secondary full-width" type="button">
+          Open Chrome side panel
+        </button>
+        <p class="help">
+          Available in desktop Chrome. Codex’s embedded browser currently
+          supports the popup and a workspace tab instead.
+        </p>
+      </section>
       <section class="settings-section">
         <h3>Connection</h3>
         <p id="settings-connection" class="connection-description">

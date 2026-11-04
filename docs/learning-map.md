@@ -62,6 +62,10 @@ UI feature commits: `af76d8b` adds the complete agent interface and settings; `2
 
 Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The user submitted the task through the extension UI and confirmed its activity/screenshot display; a separate CLI read verified Visitor name `UI Test`, delivery `express`, and Gift wrap checked. The practice backend contained no submitted order with that visitor name. No payment or external communication was performed. Direct automation of the extension workspace was blocked by the browser tool's URL policy, so the live UI interaction was user-operated rather than falsely claimed as tool-operated.
 
+## Visible input feedback
+
+`browser-controller.js` draws an agent pointer using Chrome's compositor Overlay domain before trusted mouse input. Movement is eased over a short sequence of frames, and a click flashes a small highlight. The overlay is not a website element, so it does not intercept clicks, pollute page text, or invalidate DOM refs. Screenshot capture hides the highlight; inactivity and debugger detach clean it up. Hosts without the Overlay domain keep the existing input behavior. The layout chooser and Settings call Chrome's native sidePanel API only after the user chooses that presentation; embedded hosts may still require a separate workspace tab.
+
 ## Verification
 
 `npm test` runs deterministic tests for access isolation, stale refs, command validation, input dispatch, lifecycle, model adapters, MCP images, agent tool feedback, and limits. Chrome APIs or model responses are mocked where appropriate; those tests alone do not prove a live browser action.
