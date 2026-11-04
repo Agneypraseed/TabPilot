@@ -48,6 +48,25 @@ test("a trusted extension workspace tab can use the same API as the popup", asyn
     assert.equal(worker.executions, 1);
 });
 
+test("history namespace survives extension reload and changes on browser startup", async () => {
+    const local = {};
+    let startup;
+    const chrome = {
+        runtime: { id: "test", onMessage: { addListener() {} }, onStartup: { addListener(fn) { startup = fn; } } },
+        tabs: { onRemoved: { addListener() {} } },
+        storage: { local: { get: async () => ({ ...local }), set: async value => Object.assign(local, value) } }
+    };
+    mockDebugger(chrome, async () => ({}));
+    function worker() { const context = vm.createContext({ chrome, URL, crypto: globalThis.crypto }); vm.runInContext(backgroundSource, context); return context; }
+    const original = await worker().historyScope();
+    const reloaded = worker();
+    assert.equal(await reloaded.historyScope(), original);
+    startup();
+    const fresh = await reloaded.historyScope();
+    assert.notEqual(fresh, original);
+    assert.equal(await worker().historyScope(), fresh);
+});
+
 test("invalid tab IDs and protected pages never execute a reader", async () => {
     const worker = background({ url: "chrome://extensions/" });
     for (const id of [undefined, "12", -1, 1.5]) {

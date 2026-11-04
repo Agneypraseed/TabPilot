@@ -8,6 +8,9 @@ import { resolve } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import { parseBrowserCommand } from "./commands.mjs";
 import { AgentService } from "./agent-service.mjs";
+import { TraceHistory } from "./trace-history.mjs";
+
+const historyId = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
 async function readCommand(request) {
     const text = await new Promise((resolve, reject) => {
@@ -26,10 +29,22 @@ async function readCommand(request) {
 export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
     if (!token) throw new Error("A pairing token is required.");
     let extension = null;
+    let extensionScope = randomUUID();
+    const traceStore = agentService?.traceStore;
     const pending = new Map();
     const sockets = new Set();
+    const historyFailure = error => agentService?.traceFailure(error);
+    const finishTrace = async (entry, ok, data) => {
+        if (!entry.trace) return;
+        await traceStore.append(entry.trace, { kind: "tool", phase: ok ? "complete" : "error", callId: entry.callId,
+            tool: entry.command.method, result: data });
+        if (entry.external) await traceStore.finish(entry.trace, ok ? "completed" : "error");
+    };
     const unsubscribe = agentService?.subscribe(state => {
         if (extension?.readyState === WebSocket.OPEN) extension.send(JSON.stringify({ type: "agent-state", state }));
+    });
+    const unsubscribeHistory = agentService?.subscribeHistory(revision => {
+        if (extension?.readyState === WebSocket.OPEN) extension.send(JSON.stringify({ type: "history-changed", revision }));
     });
     const authenticate = (candidate) => {
         const actual = Buffer.from(candidate ?? "");
@@ -70,16 +85,42 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
             return reply(response, 503, { ok: false, error: "Open TabPilot and connect the local bridge." });
         }
         if (pending.size >= 16) return reply(response, 429, { ok: false, error: "Too many pending requests." });
+        const targetExtension = extension;
 
         const id = randomUUID();
+        let trace = null, external = false;
+        if (traceStore && Number.isSafeInteger(command.tabId)) {
+            try {
+                const workspace = agentService.traceContext;
+                if (agentService.active && workspace && request.headers["x-tabpilot-run"] === workspace.runId &&
+                    command.tabId === workspace.tabId && extensionScope === workspace.scope) trace = workspace;
+                else {
+                    external = true;
+                    trace = { scope: extensionScope, tabId: command.tabId, runId: id };
+                    const source = ["cli", "mcp"].includes(request.headers["x-tabpilot-source"]) ? request.headers["x-tabpilot-source"] : "api";
+                    await traceStore.start({ ...trace, source, task: `${source.toUpperCase()} · ${command.method}`, bridgeSessionId: agentService.sessionId });
+                }
+                const args = { ...command.params };
+                if (command.method === "fill" && "text" in args) args.text = "[typed value omitted; inspect resulting page state]";
+                await traceStore.append(trace, { kind: "tool", phase: "running", callId: id, tool: command.method, arguments: args });
+            } catch (error) { trace = null; historyFailure(error); }
+        }
+        const entry = { response, command, trace, external, callId: id };
+        if (extension !== targetExtension || extension?.readyState !== WebSocket.OPEN || response.destroyed || pending.size >= 16) {
+            void finishTrace(entry, false, { error: "Browser connection changed or request cancelled before dispatch." }).catch(historyFailure);
+            if (!response.destroyed) reply(response, 503, { ok: false, error: "Browser connection changed. Reconnect and try again." });
+            return;
+        }
         const timer = setTimeout(() => {
             pending.delete(id);
+            void finishTrace(entry, false, { error: "Extension request timed out; action outcome unknown." }).catch(historyFailure);
             reply(response, 504, { ok: false, error: "Extension request timed out." });
         }, timeoutMs);
-        pending.set(id, { response, timer });
+        entry.timer = timer;
+        pending.set(id, entry);
         response.on("close", () => {
             clearTimeout(timer);
-            pending.delete(id);
+            if (pending.delete(id)) void finishTrace(entry, false, { error: "Client disconnected; action outcome unknown." }).catch(historyFailure);
         });
         extension.send(JSON.stringify({ type: "request", id, ...command }));
     });
@@ -109,6 +150,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                     clearTimeout(authTimer);
                     authenticated = true;
                     extension = client;
+                    extensionScope = historyId(message.historyScope) ? message.historyScope : extensionScope;
                     client.send(JSON.stringify({ type: "ready" }));
                     if (agentService) client.send(JSON.stringify({ type: "agent-state", state: agentService.snapshot() }));
                     return;
@@ -118,8 +160,11 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                         client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: "Restart the bridge to enable the agent interface." }));
                         return;
                     }
-                    Promise.resolve().then(() => agentService.command(message.method, message.payload)).then(
-                        state => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: true, state })); },
+                    const payload = ["start", "history-list", "history-events", "history-image"].includes(message.method)
+                        ? { ...message.payload, scope: extensionScope } : message.payload;
+                    Promise.resolve().then(() => agentService.command(message.method, payload)).then(
+                        result => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: true,
+                            ...(message.method.startsWith("history-") ? { history: result.history } : { state: result }) })); },
                         error => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: error instanceof Error && error.name === "ZodError" ? "Invalid agent settings or task." : String(error.message ?? "Agent command failed.") })); }
                     );
                     return;
@@ -129,6 +174,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                 if (!entry) return;
                 pending.delete(message.id);
                 clearTimeout(entry.timer);
+                void finishTrace(entry, message.ok === true, message.ok === true ? message.data : { error: String(message.error ?? "Extension request failed.") }).catch(historyFailure);
                 reply(entry.response, message.ok === true ? 200 : 409,
                     message.ok === true
                         ? { ok: true, data: message.data }
@@ -140,8 +186,10 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
                 if (extension !== client) return;
                 extension = null;
                 agentService?.disconnect();
-                for (const { response, timer } of pending.values()) {
+                for (const entry of pending.values()) {
+                    const { response, timer } = entry;
                     clearTimeout(timer);
+                    void finishTrace(entry, false, { error: "Extension disconnected; action outcome unknown." }).catch(historyFailure);
                     reply(response, 503, { ok: false, error: "Extension disconnected." });
                 }
                 pending.clear();
@@ -160,6 +208,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService } = {}) {
         server,
         async close() {
             unsubscribe?.();
+            unsubscribeHistory?.();
             agentService?.disconnect();
             clearInterval(heartbeat);
             for (const client of sockets) client.terminate();
@@ -176,10 +225,11 @@ async function main() {
     let settings;
     try { settings = JSON.parse(await readFile(settingsFile, "utf8")); }
     catch (error) { if (error.code !== "ENOENT") throw new Error("Invalid local agent settings. Check .tabpilot/agent-settings.json."); }
-    const agentService = new AgentService({ settings, saveSettings: async next => {
+    const token = randomBytes(32).toString("hex");
+    const traceStore = new TraceHistory(fileURLToPath(new URL(".tabpilot/history/", import.meta.url)), { env: process.env, secrets: [token] });
+    const agentService = new AgentService({ settings, traceStore, saveSettings: async next => {
         await writeFile(settingsFile, JSON.stringify(next, null, 2), { mode: 0o600 });
     } });
-    const token = randomBytes(32).toString("hex");
     const bridge = createBridge({ token, agentService });
     await new Promise((done, reject) => {
         bridge.server.once("error", reject);

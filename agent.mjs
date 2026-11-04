@@ -10,14 +10,8 @@ import { observedBrowserServer } from "./agent-browser-session.mjs";
 export async function runBrowserAgent(prompt, {
     model = DEFAULT_OPENAI_MODEL,
     modelSettings = { maxTokens: 2000, store: false },
-    server = new MCPServerStdio({
-        name: "TabPilot",
-        command: process.execPath,
-        args: [fileURLToPath(new URL("./mcp.mjs", import.meta.url))],
-        cacheToolsList: true,
-        useStructuredContent: false,
-        clientSessionTimeoutSeconds: 30
-    }),
+    server,
+    traceContext,
     maxTurns = 30,
     signal = AbortSignal.timeout(300000),
     onToolCall = () => {},
@@ -30,6 +24,15 @@ export async function runBrowserAgent(prompt, {
     onObservation = () => {},
     history = []
 } = {}) {
+    server ??= new MCPServerStdio({
+        name: "TabPilot",
+        command: process.execPath,
+        args: [fileURLToPath(new URL("./mcp.mjs", import.meta.url))],
+        cacheToolsList: true,
+        useStructuredContent: false,
+        clientSessionTimeoutSeconds: 30,
+        ...(traceContext ? { env: { ...process.env, TABPILOT_RUN_ID: traceContext.runId } } : {})
+    });
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("Provide a browser task.");
     try {
         await server.connect();

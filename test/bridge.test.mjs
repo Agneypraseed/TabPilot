@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, mkdir, rm } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { join, resolve, dirname, basename } from "node:path";
+import { randomUUID } from "node:crypto";
 import vm from "node:vm";
 import { request as httpRequest } from "node:http";
 import { WebSocket } from "ws";
 import { createBridge } from "../server.mjs";
 import { AgentService } from "../agent-service.mjs";
+import { TraceHistory } from "../trace-history.mjs";
 import { backgroundSource, mockDebugger } from "./background-source.mjs";
 
 const token = "a".repeat(64);
@@ -65,14 +69,74 @@ async function setup(t, options = {}) {
     };
 }
 
-async function pair(port, candidate = token) {
+async function pair(port, candidate = token, historyScope) {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/extension`, { origin });
     await once(socket, "open");
     const ready = once(socket, "message");
-    socket.send(JSON.stringify({ type: "authenticate", token: candidate }));
+    socket.send(JSON.stringify({ type: "authenticate", token: candidate, historyScope }));
     await ready;
     return socket;
 }
+
+test("bridge archives workspace and external activity without crossing tab or browser history", { timeout: 15000 }, async t => {
+    const root = fileURLToPath(new URL("../.tabpilot/", import.meta.url));
+    await mkdir(root, { recursive: true });
+    const directory = await mkdtemp(join(root, "bridge-history-test-"));
+    t.after(async () => {
+        assert.equal(resolve(dirname(directory)), resolve(root));
+        assert.ok(basename(directory).startsWith("bridge-history-test-"));
+        await rm(directory, { recursive: true, force: true });
+    });
+    const scope = randomUUID(), traceStore = new TraceHistory(directory);
+    let api;
+    const service = new AgentService({ traceStore, env: { OPENAI_API_KEY: "fixture", AGENT_MODEL: "fixture" },
+        configure: async () => ({ model: {}, close: async () => {} }),
+        run: async (_prompt, options) => {
+            const response = await api.request("/snapshot/12", { "X-TabPilot-Run": options.traceContext.runId, "X-TabPilot-Source": "mcp" });
+            assert.equal(response.status, 200);
+            await response.json();
+            const fill = await fetch(`http://127.0.0.1:${api.port}/command`, { method: "POST",
+                headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-TabPilot-Run": options.traceContext.runId },
+                body: JSON.stringify({ method: "fill", tabId: 12, params: { ref: "snapshot:e1", text: "sensitive-typed-value" } }) });
+            assert.equal(fill.status, 200);
+            await fill.json();
+            return { answer: "Workspace task complete" };
+        } });
+    api = await setup(t, { agentService: service });
+    const extension = await pair(api.port, token, scope);
+    extension.on("message", raw => {
+        const message = JSON.parse(raw);
+        if (message.type !== "request") return;
+        extension.send(JSON.stringify({ type: "response", id: message.id, ok: true,
+            data: { title: `Tab ${message.tabId}`, text: "Observed", elements: [] } }));
+    });
+    await service.command("start", { scope, tabId: 12, mode: "browser", prompt: "Check my page" });
+    await service.running;
+    const runs = (await traceStore.list({ scope, tabId: 12 })).runs;
+    assert.equal(runs.length, 1, "workspace tool calls attach to their existing task, not duplicate runs");
+    assert.equal(runs[0].source, "workspace");
+    const events = (await traceStore.events({ scope, tabId: 12, runId: runs[0].runId })).events;
+    assert.ok(events.some(event => event.kind === "tool" && event.phase === "complete" && event.result.title === "Tab 12"));
+    assert.ok(!JSON.stringify(events).includes("sensitive-typed-value"));
+    assert.match(events.find(event => event.tool === "fill" && event.phase === "running").arguments.text, /omitted/);
+    await (await api.request("/snapshot/34", { "X-TabPilot-Source": "cli" })).json();
+    const external = (await traceStore.list({ scope, tabId: 34 })).runs;
+    assert.equal(external.length, 1);
+    assert.equal(external[0].source, "cli");
+    assert.equal((await traceStore.list({ scope, tabId: 12 })).runs.length, 1);
+    const response = new Promise(resolve => {
+        const listener = raw => {
+            const message = JSON.parse(raw);
+            if (message.type === "agent-response" && message.id === "history-check") { extension.off("message", listener); resolve(message); }
+        };
+        extension.on("message", listener);
+    });
+    extension.send(JSON.stringify({ type: "agent-request", id: "history-check", method: "history-list", payload: { scope: randomUUID(), tabId: 12 } }));
+    const history = await response;
+    assert.equal(history.ok, true);
+    assert.equal(history.history.runs.length, 1);
+    assert.equal(history.history.runs[0].tabId, 12);
+});
 
 test("local API rejects bad tokens, browser origins, and rebound hosts", async (t) => {
     const api = await setup(t);

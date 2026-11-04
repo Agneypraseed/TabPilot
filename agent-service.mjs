@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { runBrowserAgent } from "./agent.mjs";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
+import { historyQuery } from "./trace-history.mjs";
 
 const providers = { openai: "OPENAI_API_KEY", meta: "META_API_KEY", gemini: "GOOGLE_GENERATIVE_AI_API_KEY", claude: "ANTHROPIC_API_KEY", "openai-compatible": "COMPATIBLE_API_KEY" };
 const settingsSchema = z.object({
@@ -9,10 +10,10 @@ const settingsSchema = z.object({
     maxTurns: z.number().int().min(1).max(100), timeoutMs: z.number().int().min(1000).max(900000)
 }).strict();
 const startSchema = z.object({ prompt: z.string().trim().min(1).max(12000),
-    tabId: z.number().int().nonnegative(), mode: z.enum(["browser", "computer"]) }).strict();
+    tabId: z.number().int().nonnegative(), mode: z.enum(["browser", "computer"]), scope: z.string().uuid().optional(), tabTitle: z.string().max(500).optional() }).strict();
 
 export class AgentService {
-    constructor({ env = process.env, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel } = {}) {
+    constructor({ env = process.env, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel, traceStore } = {}) {
         this.env = { ...env };
         this.settings = settingsSchema.parse(settings ?? {
             provider: env.AGENT_PROVIDER || "openai", model: env.AGENT_MODEL || DEFAULT_OPENAI_MODEL,
@@ -23,6 +24,11 @@ export class AgentService {
         this.configureModel = configure;
         this.listeners = new Set();
         this.sessionId = randomUUID();
+        this.traceStore = traceStore;
+        this.historyListeners = new Set();
+        if (traceStore) { traceStore.bridgeSessionId = this.sessionId; traceStore.onChange = () => {
+            for (const listener of this.historyListeners) listener(traceStore.revision);
+        }; }
         this.revision = 0;
         this.history = [];
         this.conversationTab = null;
@@ -30,13 +36,20 @@ export class AgentService {
     }
     get active() { return ["running", "pausing", "paused", "stopping"].includes(this.state.status); }
     snapshot() {
-        return { ...this.state, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
+        return { ...this.state, historyRevision: this.traceStore?.revision ?? 0, historyAvailable: !!this.traceStore, historyWarning: this.historyWarning, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
     }
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+    subscribeHistory(listener) { this.historyListeners.add(listener); return () => this.historyListeners.delete(listener); }
     emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
     event(kind, text, extra = {}) {
-        this.state.events.push({ id: randomUUID(), kind, text, time: Date.now(), ...extra });
+        const event = { id: randomUUID(), kind, text, time: Date.now(), ...extra };
+        this.state.events.push(event);
+        if (this.traceContext && kind !== "tool") this.traceStore.append(this.traceContext, event).catch(error => this.traceFailure(error));
         this.state.events = this.state.events.slice(-160);
+        this.emit();
+    }
+    traceFailure(error) {
+        this.historyWarning = `History could not be saved: ${formatAgentError(error, this.env)}`;
         this.emit();
     }
     async checkpoint() {
@@ -53,6 +66,12 @@ export class AgentService {
     }
     async command(method, payload = {}) {
         if (method === "state") return this.snapshot();
+        if (["history-list", "history-events", "history-image"].includes(method)) {
+            const query = historyQuery.parse(payload);
+            if (!this.traceStore) throw new Error("Restart the bridge to enable History.");
+            const operation = { "history-list": "list", "history-events": "events", "history-image": "artifact" }[method];
+            return { history: await this.traceStore[operation](query) };
+        }
         if (method === "settings") {
             if (this.active) throw new Error("Stop the current run before changing model settings.");
             const next = settingsSchema.parse(payload);
@@ -68,6 +87,7 @@ export class AgentService {
             this.history = [];
             this.conversationTab = null;
             this.state = { status: "idle", runId: null, events: [], screenshot: null };
+            this.traceContext = null;
             this.emit();
             return this.snapshot();
         }
@@ -79,6 +99,10 @@ export class AgentService {
             this.controller = new AbortController();
             this.steering = [];
             this.state = { ...this.state, status: "running", runId: randomUUID(), tabId: input.tabId, mode: input.mode, screenshot: null };
+            this.traceContext = this.traceStore && input.scope ? { scope: input.scope, tabId: input.tabId, runId: this.state.runId } : null;
+            this.traceReady = this.traceContext ? this.traceStore.start({ ...this.traceContext,
+                bridgeSessionId: this.sessionId, source: "workspace", task: input.prompt, title: input.tabTitle,
+                provider: this.settings.provider, model: this.settings.model, mode: input.mode }).catch(error => this.traceFailure(error)) : Promise.resolve();
             this.event("user", input.prompt);
             // Own the promise: returning immediately lets the panel receive progress
             // and send stop/steering while the model is working.
@@ -94,25 +118,28 @@ export class AgentService {
             this.event("user", text, { queued: true });
         } else if (method === "pause") {
             if (this.state.status === "running") this.state.status = "pausing";
-            this.emit();
+            this.event("status", "Pause requested");
         } else if (method === "resume") {
-            if (["paused", "pausing"].includes(this.state.status)) { this.state.status = "running"; this.wake?.(); this.emit(); }
+            if (["paused", "pausing"].includes(this.state.status)) { this.state.status = "running"; this.wake?.(); this.event("status", "Run resumed"); }
         } else if (method === "stop") {
             this.state.status = "stopping";
             this.controller.abort(new Error("Stopped by user."));
-            this.emit();
+            this.event("status", "Stop requested");
         } else throw new Error("Unknown agent command.");
         return this.snapshot();
     }
     async execute(input) {
         let configured;
+        const traceContext = this.traceContext;
         const timer = setTimeout(() => this.controller.abort(new Error("Run time limit reached.")), this.settings.timeoutMs);
         try {
+            await this.traceReady;
             configured = await this.configureModel({ ...this.env, AGENT_PROVIDER: this.settings.provider, AGENT_MODEL: this.settings.model });
             this.controller.signal.throwIfAborted();
             const result = await this.runAgent(input.prompt, {
                 model: configured.model, modelSettings: configured.modelSettings, targetTabId: input.tabId, mode: input.mode,
                 maxTurns: this.settings.maxTurns, signal: this.controller.signal, history: this.history,
+                traceContext,
                 checkpoint: () => this.checkpoint(), hasSteering: () => this.steering.length > 0,
                 getSteering: () => {
                     const messages = this.steering.splice(0);
@@ -134,8 +161,10 @@ export class AgentService {
             this.history = [];
             this.event(this.state.status === "error" ? "error" : "status", formatAgentError(this.controller.signal.reason ?? error, this.env));
         } finally {
+            const finalStatus = this.state.status;
             clearTimeout(timer);
             try { await configured?.close(); } catch { /* Runtime outcome already reported. */ }
+            if (traceContext) await this.traceStore.finish(traceContext, finalStatus).catch(error => this.traceFailure(error));
             this.emit();
         }
     }

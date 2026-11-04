@@ -7,6 +7,23 @@ let bridgeSocket = null;
 let bridgeReady = false;
 let agentState = null;
 const agentRequests = new Map();
+let historyScopePromise;
+function historyScope() {
+    return historyScopePromise ??= (async () => {
+        if (!chrome.storage.local) return crypto.randomUUID();
+        const stored = await chrome.storage.local.get("historyScope");
+        if (typeof stored.historyScope === "string" && /^[a-f0-9-]{36}$/i.test(stored.historyScope)) return stored.historyScope;
+        const scope = crypto.randomUUID();
+        await chrome.storage.local.set({ historyScope: scope });
+        return scope;
+    })();
+}
+// Chrome may reuse numeric tab IDs in a new browser session. Give that session
+// a new history namespace, while extension reloads retain the current one.
+chrome.runtime.onStartup?.addListener(() => {
+    const scope = crypto.randomUUID();
+    historyScopePromise = chrome.storage.local.set({ historyScope: scope }).then(() => scope);
+});
 
 // A persistent side panel remains visible while the agent uses the page.
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
@@ -105,7 +122,10 @@ function connectBridge(token) {
             socket.close();
             reject(new Error("Bridge connection timed out."));
         }, 5000);
-        socket.onopen = () => socket.send(JSON.stringify({ type: "authenticate", token }));
+        socket.onopen = async () => {
+            try { socket.send(JSON.stringify({ type: "authenticate", token, historyScope: await historyScope() })); }
+            catch { socket.close(); reject(new Error("Could not initialize local tab history.")); }
+        };
         socket.onmessage = async (event) => {
             let message;
             try { message = JSON.parse(event.data); }
@@ -118,12 +138,17 @@ function connectBridge(token) {
                 return;
             }
             if (ready && message.type === "agent-state") { publishAgentState(message.state); return; }
+            if (ready && message.type === "history-changed") {
+                if (agentState) agentState.historyRevision = message.revision;
+                chrome.runtime.sendMessage?.({ type: "tabpilot:history-event", revision: message.revision }).catch(() => {});
+                return;
+            }
             if (ready && message.type === "agent-response") {
                 const pending = agentRequests.get(message.id);
                 if (pending) {
                     clearTimeout(pending.timer);
                     agentRequests.delete(message.id);
-                    if (message.ok) { publishAgentState(message.state); pending.resolve({ ok: true, state: message.state }); }
+                    if (message.ok) { if (message.state) publishAgentState(message.state); pending.resolve({ ok: true, state: message.state, history: message.history }); }
                     else pending.reject(new Error(message.error || "Agent request failed."));
                 }
                 return;

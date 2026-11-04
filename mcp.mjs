@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { requestBridge } from "./bridge-client.mjs";
 import { actionParameters, commandDescriptions, mcpActionName } from "./commands.mjs";
 
-export function createTabPilotMcp({ request = requestBridge } = {}) {
+export function createTabPilotMcp({ request = (method, tabId, params) => requestBridge(method, tabId, params, { source: "mcp" }) } = {}) {
     const server = new McpServer({ name: "tabpilot", version: "0.1.0" });
     const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
     const result = async (operation) => {

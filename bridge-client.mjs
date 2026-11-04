@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { parseBrowserCommand } from "./commands.mjs";
+import { randomUUID } from "node:crypto";
+const clientSession = randomUUID();
 
 export async function loadBridgeConfig() {
     let config;
@@ -15,7 +17,7 @@ export async function loadBridgeConfig() {
     return config;
 }
 
-export async function requestBridge(command, tabId, params = {}) {
+export async function requestBridge(command, tabId, params = {}, { source = "cli" } = {}) {
     const action = command !== "tabs" && command !== "snapshot" ? parseBrowserCommand({ method: command, tabId, params }) : null;
     if (command === "snapshot" && (!Number.isSafeInteger(tabId) || tabId < 0)) {
         throw new Error("Invalid tab ID.");
@@ -27,7 +29,8 @@ export async function requestBridge(command, tabId, params = {}) {
     try {
         response = await fetch(config.url + path, {
             method: "POST",
-            headers: { Authorization: `Bearer ${config.token}`, ...(action ? { "Content-Type": "application/json" } : {}) },
+            headers: { Authorization: `Bearer ${config.token}`, "X-TabPilot-Source": source, "X-TabPilot-Client": clientSession,
+                ...(process.env.TABPILOT_RUN_ID ? { "X-TabPilot-Run": process.env.TABPILOT_RUN_ID } : {}), ...(action ? { "Content-Type": "application/json" } : {}) },
             ...(action ? { body: JSON.stringify(action) } : {}),
             signal: AbortSignal.timeout(25000),
             redirect: "error"
