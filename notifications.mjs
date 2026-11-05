@@ -21,7 +21,9 @@ const fields = {
 export class Notifications {
     constructor({ env = globalThis.process?.env ?? {}, fetch: fetcher = fetch, sanitize = value => value } = {}) {
         this.env = { ...env };
-        this.fetch = fetcher;
+        // Native browser fetch checks its Window/WorkerGlobalScope receiver.
+        // Calling an unbound copy as this.fetch otherwise throws before sending.
+        this.fetch = fetcher.bind(globalThis);
         this.sanitize = sanitize;
     }
     status() {

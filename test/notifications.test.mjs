@@ -76,3 +76,17 @@ test("provider rejections and malformed successes cannot be reported as accepted
         assert.ok(!JSON.stringify(result).includes("secret provider body"));
     }
 });
+
+
+test("notification transport invokes native-compatible fetch with the global receiver", async () => {
+    let calls = 0;
+    const browserFetch = function () {
+        if (this !== globalThis) throw new TypeError("Failed to execute 'fetch': Illegal invocation");
+        calls++;
+        return Promise.resolve(Response.json({ ok: true, result: { message_id: 123 } }));
+    };
+    const service = new Notifications({ env, fetch: browserFetch });
+    const result = await service.send({ ...input, channels: ["telegram"] });
+    assert.equal(result.accepted, true);
+    assert.equal(calls, 1);
+});
