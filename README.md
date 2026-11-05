@@ -76,7 +76,9 @@ Use **Settings → Telegram → Send test alert** to check the saved destination
 
 Task checkpoints, History and images use the browser’s IndexedDB storage. Earlier Chrome-local records are copied safely on upgrade and retained as a backup. Storage failures preserve saved records and report a warning. Credentials remain in the selected Chrome session/local settings storage.
 
-Alerts report pending requests and verified coordinator completion; repeating tasks notify for each successful occurrence. They contain task IDs and summaries or help questions. Notifications leave your device for Telegram or Resend. They do not include a screenshot or full task history, and cannot approve actions or resume a task. Respond in TabPilot.
+Permission alerts lead with the proposed action and its context. When available, this includes the page, visible recipient and message subject; full message bodies and task prompts are not copied automatically. Internal request IDs stay in TabPilot.
+
+Alerts report pending requests and verified coordinator completion; repeating tasks notify for each successful occurrence. They contain task summaries or help questions and relevant approval details. Notifications leave your device for Telegram or Resend. They do not include a screenshot or full task history, and cannot approve actions or resume a task. Respond in TabPilot.
 
 Provider acceptance does not prove delivery. Sends time out after 10 seconds, do not block the agent, and are never retried automatically because an uncertain send may already have arrived. Failures appear in the Tasks summary without changing the task result. Alerts are best effort and are not replayed after a runtime restart.
 

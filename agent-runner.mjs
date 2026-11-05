@@ -105,7 +105,7 @@ export async function runBrowserAgent(prompt, {
                 return { ...modelData, input: [...modelData.input, ...guidance.map(content => ({ role: "user", content }))] };
             }
         }); } catch (error) {
-            for (const [callId, name] of pendingLocal) onLocalTool({ tool: name, phase: "error", callId, result: { error: formatAgentError(error) } });
+            for (const [callId, name] of pendingLocal) onLocalTool({ tool: name, phase: signal.aborted ? "stopped" : "error", callId, result: { error: formatAgentError(error) } });
             if (continueOnLimit && error.name === "MaxTurnsExceededError" && Array.isArray(error.state?.history)) {
                 return { answer: "Continuing from the saved tool results.", history: error.state.history, toolCalls, continuation: true };
             }

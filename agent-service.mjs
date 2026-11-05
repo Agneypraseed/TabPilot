@@ -214,7 +214,7 @@ export class AgentService {
                     if (messages.length) this.event("status", "New guidance received");
                     return messages;
                 },
-                onActivity: activity => this.event("tool", activity.tool, activity),
+                onActivity: activity => this.event("tool", activity.tool, {...activity,...(activity.error ? {error:formatAgentError({message:activity.error},this.env)} : {})}),
                 onLocalTool: activity => {
                     this.event("tool", activity.tool, activity);
                     // Browser tools are archived at the HTTP boundary. SDK-local

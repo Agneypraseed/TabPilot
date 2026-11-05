@@ -3,6 +3,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 import { AgentService } from "./agent-service.mjs";
 import { taskInputSchema } from "./task-schema.mjs";
+import { taskRequestAlert } from "./task-alerts.mjs";
 import { checkpointHistory } from "./task-checkpoint.mjs";
 
 const terminal = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -250,8 +251,7 @@ export class TaskManager {
             for (const request of state.requests ?? []) {
                 if (notifiedRequests.has(request.id)) continue;
                 notifiedRequests.add(request.id);
-                this.notify({ subject: request.kind === "approval" ? "TabPilot needs your permission" : "TabPilot needs your input",
-                    message: `Task: ${record.id}\nTab: ${record.tabId}\nRequest: ${request.id}\n\n${request.question.slice(0, 2400)}\n\nOpen TabPilot to review and respond. This notification does not grant approval. Expires: ${new Date(request.expiresAt).toISOString()}` }, { requestId: request.id, taskId: record.id });
+                this.notify(taskRequestAlert(record, request), { requestId: request.id, taskId: record.id });
             }
             record.status = ["needs-input", "waiting-for-worker"].includes(state.status) ? state.status : ["paused", "pausing"].includes(state.status) ? "paused" : "running";
             void this.save(record).catch(error => { this.schedulerWarning = error.message; });

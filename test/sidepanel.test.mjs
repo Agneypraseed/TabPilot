@@ -455,3 +455,26 @@ test("Telegram connection check asks for host access and does not send a notific
  assert.match(ui.document.getElementById("notice").textContent,/No alert was sent/);
  assert.ok(ui.calls.some(call=>call.permissionRequest?.origins[0]==="https://api.telegram.org/*"));
 });
+
+
+test("activity failures show an explanation, keep successful retries separate and render details as text",async()=>{
+ const ui=await panel();const $=id=>ui.document.getElementById(id);
+ ui.receive({...ui.agent,revision:2,events:[
+  {id:'activity-1',kind:'tool',tool:'browser_fill',activityId:'attempt-1',targetName:'Search',phase:'running',time:1},
+  {id:'activity-2',kind:'tool',tool:'browser_fill',activityId:'attempt-1',targetName:'Search',phase:'error',error:'STALE_REF <img src=x onerror=alert(1)>',time:2},
+  {id:'activity-3',kind:'tool',tool:'browser_fill',activityId:'attempt-2',targetName:'Search',phase:'running',time:3},
+  {id:'activity-4',kind:'tool',tool:'browser_fill',activityId:'attempt-2',targetName:'Search',phase:'complete',time:4},
+ ]});
+ const rows=$('messages').querySelectorAll('.activity');assert.equal(rows.length,2);
+ assert.match(rows[0].textContent,/Couldn’t type into the field.*Search/);
+ assert.match(rows[0].textContent,/page changed/);assert.match(rows[0].querySelector('details').textContent,/STALE_REF/);
+ assert.equal(rows[0].querySelector('img'),null);
+ assert.match(rows[1].textContent,/Typed into the field.*Search/);
+ assert.equal(rows[1].classList.contains('complete'),true);
+});
+
+test("user-declined helper steps are shown as paused rather than a failed task",async()=>{
+ const ui=await panel();ui.receive({...ui.agent,revision:2,events:[{id:'denied-tool',kind:'tool',tool:'request_user_help',phase:'stopped',result:{error:'Paused because you declined the request.'},time:1}]});
+ assert.match(ui.document.getElementById('messages').textContent,/Request declined — task paused/);
+ assert.equal(ui.document.getElementById('messages').querySelector('.activity.error'),null);
+});

@@ -83,7 +83,7 @@ test("permission alerts are sent once and cannot answer or bypass the pending ap
     assert.equal(blocked, true);
     assert.match(messages[0].subject, /permission/);
     assert.match(messages[0].message, /Send the prepared report/);
-    assert.ok(messages[0].message.includes(request.id));
+    assert.ok(!messages[0].message.includes(request.id), "Internal request IDs do not replace the action description");
     assert.deepEqual(responses, []);
     const session = [...ui.manager.sessions.values()][0];
     session.emit(); session.emit();

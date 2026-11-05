@@ -96,3 +96,22 @@ test("visible MCP adapter restricts tab scope, cancels obsolete actions, returns
     assert.equal(images.length, 1);
     assert.deepEqual(calls.map(c => c[0]), ["browser_tabs", "browser_click", "browser_screenshot"]);
 });
+
+
+test("browser activities carry target and failure reason without the typed value",async()=>{
+ const events=[];
+ const raw={callToolResult:async name=>name==='browser_snapshot'?{structuredContent:{elements:[{ref:'field',name:'Search',value:'private field value'}]},content:[]}:{isError:true,content:[{type:'text',text:'STALE_REF: page changed'}]}};
+ const server=observedBrowserServer(raw,{onActivity:event=>events.push(event)});
+ await server.callToolResult('browser_snapshot',{tabId:12});
+ await server.callToolResult('browser_fill',{tabId:12,ref:'field',text:'private typed text'});
+ const failed=events.at(-1);assert.equal(failed.phase,'error');assert.equal(failed.targetName,'Search');assert.match(failed.error,/STALE_REF/);
+ assert.equal(failed.activityId,events.at(-2).activityId);
+ assert.ok(!JSON.stringify(events).includes('private typed text'));assert.ok(!JSON.stringify(events).includes('private field value'));
+});
+
+test("activity error details redact configured credentials before reaching the UI",async()=>{
+ const service=setup(async(_prompt,options)=>{options.onActivity({tool:'browser_fill',phase:'error',error:'Failed '+env.META_API_KEY});return {answer:'Recovered',history:[]};});
+ await service.command('start',{prompt:'Read',tabId:12,mode:'browser'});await service.running;
+ assert.ok(!JSON.stringify(service.snapshot()).includes(env.META_API_KEY));
+ assert.match(service.state.events.find(event=>event.kind==='tool').error,/redacted/);
+});

@@ -696,6 +696,40 @@
       row.append(text, show, toggle); list.append(row);
     }
   }
+  function fillActivityRow(row, event) {
+    row.replaceChildren();
+    row.className = `activity ${event.phase}`;
+    const content = document.createElement("div");
+    content.className = "activity-content";
+    const title = document.createElement("span");
+    const normal = labels[event.tool] || event.tool.replace(/^browser_/, "");
+    const action = {browser_fill:"type into the field",browser_click:"click the control",browser_select:"change the selection",browser_press:"press the key",browser_navigate:"open the page",browser_screenshot:"capture the page",browser_download:"start the download"}[event.tool];
+    const target = event.targetName ? ` “${event.targetName}”` : "";
+    const completed = {browser_fill:"Typed into the field",browser_click:"Clicked the control",browser_snapshot:"Read the page",browser_select:"Changed the selection",browser_press:"Pressed the key",browser_navigate:"Opened the page",browser_screenshot:"Captured the page",browser_download:"Started the download"};
+    title.textContent = event.phase === "error" ? action ? `Couldn’t ${action}${target}` : `${normal} — step unsuccessful`
+      : event.phase === "stopped" ? /declined/i.test(event.error || event.result?.error || "") ? "Request declined — task paused" : `${normal} — interrupted`
+      : (event.phase === "complete" ? completed[event.tool] || normal : normal) + target;
+    content.append(title);
+    const reason = event.error || event.result?.error;
+    if(event.phase === "error" || event.phase === "stopped") {
+      const hint = document.createElement("p");
+      hint.className = "activity-hint";
+      hint.textContent = event.phase === "stopped" ? "No automatic retry. Review the task before continuing."
+        : /STALE_|stale|page changed|reference.*expired/i.test(reason || "") ? "The page changed, so this step needs a fresh view."
+        : /obscured|covered|intercept/i.test(reason || "") ? "Another element was covering the control."
+        : /access disabled|revoked|permission/i.test(reason || "") ? "This step was blocked by tab access or an approval requirement."
+        : "This step did not finish. It does not by itself mean the whole task failed.";
+      content.append(hint);
+      if(reason) {
+        const details = document.createElement("details"), summary = document.createElement("summary"), text = document.createElement("p");
+        summary.textContent = "Details";text.textContent = reason;
+        details.append(summary,text);content.append(details);
+      }
+    }
+    const time = document.createElement("span");time.className = "time";
+    time.textContent = new Date(event.time).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+    row.append(content,time);
+  }
   function renderMessages() {
     const events = agent?.events || [];
     const signature = events.map((e) => e.id).join();
@@ -707,24 +741,16 @@
       const runningTools = new Map();
       for (const event of events) {
         if (event.kind === "tool") {
-          if (event.phase !== "running" && runningTools.has(event.tool)) {
-            runningTools.get(event.tool).className = `activity ${event.phase}`;
-            runningTools.delete(event.tool);
+          const key = event.activityId || event.callId || event.tool;
+          if (event.phase !== "running" && runningTools.has(key)) {
+            fillActivityRow(runningTools.get(key), event);
+            runningTools.delete(key);
             continue;
           }
           const row = document.createElement("div");
-          row.className = `activity ${event.phase}`;
-          row.textContent =
-            labels[event.tool] || event.tool.replace(/^browser_/, "");
-          const time = document.createElement("span");
-          time.className = "time";
-          time.textContent = new Date(event.time).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-          row.append(time);
+          fillActivityRow(row, event);
           $("messages").append(row);
-          if (event.phase === "running") runningTools.set(event.tool, row);
+          if (event.phase === "running") runningTools.set(key, row);
         } else {
           const row = document.createElement("div");
           row.className = `message ${event.kind}`;

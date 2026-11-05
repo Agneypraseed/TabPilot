@@ -673,7 +673,7 @@ h3 {
 }
 .activity.error:before {
   content: "!";
-  background: #c24b35;
+  background: #ad741e;
 }
 .activity .time {
   margin-left: auto;
@@ -968,3 +968,9 @@ body.settings-open #new-chat {
 .saved-credential[hidden] { display: none; }
 .saved-credential-value { min-width: 0; overflow-wrap: anywhere; color: #26583b; font-size: 13px; }
 .saved-credential button { flex-shrink: 0; padding: 7px 12px; }
+
+.activity-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.activity-hint, .activity-content details p { margin: 5px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.activity-content summary { margin-top: 5px; cursor: pointer; color: #65502e; }
+.activity.stopped:before { content: "−"; background: #7c8493; }
+.activity .time { flex-shrink: 0; align-self: flex-start; }
