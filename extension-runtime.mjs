@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TaskManager } from './task-manager.mjs';
+import { ExtensionDatabaseStorage, migrateExtensionData } from './extension-database.mjs';
 import { Notifications } from './notifications.mjs';
 import { ExtensionTaskStore, ExtensionTraceHistory } from './extension-storage.mjs';
 import { createConfiguredModel } from './agent-models.mjs';
@@ -12,17 +13,20 @@ const configSchema = z.object({executionMode: z.enum(['extension','bridge']).opt
 
 // The worker only talks to our extension host. Chrome APIs remain in the
 // service worker; no pairing token, Node process, or localhost is used here.
-export async function createExtensionRuntime({ rpc, scope, profileId, onState = () => {}, onHistory = () => {}, enabled = true, configure = createConfiguredModel, run = runBrowserAgent }) {
+export async function createExtensionRuntime({ rpc, scope, profileId, onState = () => {}, onHistory = () => {}, enabled = true, dataStorage, notificationFetch, configure = createConfiguredModel, run = runBrowserAgent }) {
     const storage = area => ({get:key => rpc('storage-get',{area,key}),set:items => rpc('storage-set',{area,items}),remove:key => rpc('storage-remove',{area,key})});
     const local = storage('local'), session = storage('session');
+    const database = dataStorage ?? (globalThis.indexedDB ? new ExtensionDatabaseStorage() : local);
+    if(database.kind === 'indexeddb') await migrateExtensionData(local, database);
+    const storageLimits = database.kind === 'indexeddb' ? {maxBytes:Infinity} : {};
     const persistent = await local.get(['extensionCredentials','extensionRememberCredentials','extensionAgentSettings']);
     const temporary = await session.get('extensionSessionCredentials');
     let rememberCredentials = persistent.extensionRememberCredentials === true;
     let env = credentialSchema.parse({...persistent.extensionCredentials,...temporary.extensionSessionCredentials});
-    const trace = new ExtensionTraceHistory(local,{env});
-    const notifications = new Notifications({env,sanitize:value=>trace.clean(value)});
+    const trace = new ExtensionTraceHistory(database,{env,...storageLimits});
+    const notifications = new Notifications({env,fetch:notificationFetch,sanitize:value=>trace.clean(value)});
     const manager = new TaskManager({autoTick:false,
-        store:new ExtensionTaskStore(local,{sanitize:record=>trace.clean(record)}),
+        store:new ExtensionTaskStore(database,{...storageLimits,sanitize:record=>trace.clean(record)}),
         browser:(method,tabId,params)=>rpc('browser',{method,tabId,params}),
         notifications,
         serviceOptions:{env, allowUnconfiguredSettings:true, settings:persistent.extensionAgentSettings ?? {provider:'openai',model:'gpt-6-luna',maxTurns:30,timeoutMs:300000,approvalMode:'important',soundAlerts:true,downloadDirectory:'/browser/downloads'},
@@ -37,7 +41,7 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
                 return result;
             }})})}
     });
-    const metadata = () => ({executionMode:'extension',configuredFields:credentialNames.filter(key=>!!env[key]),compatibleBaseUrl:env.COMPATIBLE_BASE_URL??'',savedValues:Object.fromEntries(['TABPILOT_TELEGRAM_CHAT_ID','TABPILOT_EMAIL_FROM','TABPILOT_EMAIL_TO'].filter(name=>!!env[name]).map(name=>[name,env[name]])),rememberCredentials});
+    const metadata = () => ({executionMode:'extension',configuredFields:credentialNames.filter(key=>!!env[key]),compatibleBaseUrl:env.COMPATIBLE_BASE_URL??'',notificationStatus:notifications.status(),savedValues:Object.fromEntries(['TABPILOT_TELEGRAM_CHAT_ID','TABPILOT_EMAIL_FROM','TABPILOT_EMAIL_TO'].filter(name=>!!env[name]).map(name=>[name,env[name]])),rememberCredentials});
     const snapshot = () => ({...manager.snapshot(),executionMode:'extension',runtime:metadata()});
     manager.subscribe(()=>onState(snapshot()));
     manager.subscribeHistory(revision=>onHistory(revision));
@@ -68,6 +72,11 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
     async function command(method,payload={}) {
         if(method==='activate'){if(!manager.connection){clearInterval(manager.timer);manager.timer=setInterval(()=>void manager.tick().catch(error=>{manager.schedulerWarning=error.message;manager.emit();}),1000);manager.timer.unref?.();await manager.connected({scope,profileId});}return {ok:true,state:snapshot(),runtime:metadata()};}
         if(method==='suspend'){await manager.close();return {ok:true,runtime:metadata()};}
+        if(method==='notification-test'){
+            const {channel}=z.object({channel:z.enum(['telegram','email'])}).strict().parse(payload);
+            const notification=await notifications.send({subject:'TabPilot test alert',message:'This is the test alert you requested from TabPilot Settings. Reply to agent requests inside TabPilot.',channels:[channel]});
+            return {ok:true,notification};
+        }
         if(method==='runtime-settings')return {ok:true,state:snapshot(),runtime:metadata()};
         if(method==='runtime-configure') {
             return updateConfig(payload);
@@ -80,7 +89,7 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
         const result=await manager.command(method,payload);
         return method.startsWith('history-')?{ok:true,...result}:{ok:true,state:snapshot()};
     }
-    return {manager,snapshot,command(...args){const operation=commandQueue.then(()=>command(...args));commandQueue=operation.catch(()=>{});return operation;},close:()=>manager.close()};
+    return {manager,snapshot,command(...args){const operation=commandQueue.then(()=>command(...args));commandQueue=operation.catch(()=>{});return operation;},close:async()=>{await manager.close();if(database.kind==='indexeddb')await database.close();}};
 }
 
 // Exporting the factory keeps the lifecycle and credentials testable with

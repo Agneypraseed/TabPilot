@@ -421,3 +421,23 @@ test("saved settings remain visible after new chat and tab changes and show thei
     assert.match($("settings-storage-scope").textContent, /Saved on this device/);
     assert.equal(ui.calls.some(call => call.method === "runtime-configure"), false);
 });
+
+
+test("question cards show Telegram delivery updates without replacing a draft reply", async () => {
+ const ui=await panel();const $=id=>ui.document.getElementById(id);
+ const waiting={...ui.agent,revision:2,status:"needs-input",requests:[{id:"telegram-request",runId:"run-1",tabId:12,kind:"information",question:"Which title?"}],notificationDeliveries:[{requestId:"telegram-request",results:[{channel:"telegram",status:"sending"}]}]};
+ ui.receive(waiting);assert.match($("attention-requests").textContent,/Telegram: sending alert/);
+ $("attention-requests").querySelector("textarea").value="My pending reply";
+ ui.receive({...waiting,revision:3,notificationDeliveries:[{requestId:"telegram-request",results:[{channel:"telegram",accepted:false,error:"Provider rejected the notification (HTTP 403)."}]}]});
+ assert.match($("attention-requests").textContent,/Telegram alert failed.*HTTP 403/);
+ assert.equal($("attention-requests").querySelector("textarea").value,"My pending reply");
+ ui.receive({...waiting,revision:4,notificationDeliveries:[{requestId:"telegram-request",results:[{channel:"telegram",accepted:true}]}]});
+ assert.match($("attention-requests").textContent,/Telegram accepted the alert/);
+});
+
+test("Telegram test button sends only an explicit saved-channel test and reports acceptance", async () => {
+ const ui=await panel();const send=ui.chrome.runtime.sendMessage;
+ ui.chrome.runtime.sendMessage=async message=>message.method==="notification-test"?{ok:true,notification:{accepted:true,results:[{channel:"telegram",accepted:true}]}}:send(message);
+ await ui.dispatch("settings-button");await ui.dispatch("test-telegram");
+ assert.match(ui.document.getElementById("notice").textContent,/Telegram accepted the test alert/);
+});

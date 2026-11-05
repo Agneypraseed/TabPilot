@@ -335,6 +335,8 @@
             <input id="telegram-chat" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="Numeric chat ID" />
             <div id="telegram-chat-saved" class="saved-credential" hidden><span id="telegram-chat-saved-value" class="saved-credential-value"></span><button id="telegram-chat-change" class="secondary" type="button" aria-label="Change saved Telegram chat ID">Change</button></div>
             <p id="telegram-status" class="help">Not configured.</p>
+            <button id="test-telegram" class="secondary" type="button">Send test alert</button>
+            <p class="help">Tests the saved settings. Save any changes first. Delivery failures appear here and beside the agent’s question.</p>
             <label class="check-label"><input id="clear-telegram" type="checkbox" /> Remove Telegram settings</label>
           </details>
           <details class="credential-group">
@@ -354,6 +356,7 @@
         </section>
         <section id="credential-storage" class="settings-section">
           <h3>Credential storage</h3>
+          <p class="help">Task history and page observations are stored separately in the browser database. Upgrading preserves earlier saved tasks and history.</p>
           <label class="check-label"><input id="remember-credentials" type="checkbox" /> Remember credentials on this device</label>
           <p class="help">By default, credentials last for this browser session. Remembering saves them in this extension’s local storage, never Chrome sync. Local storage is not an encrypted vault. Keys are sent only to their selected API provider; page text and screenshots used by the agent go to that provider.</p>
           <p class="help">Leave credential fields blank to keep existing values. Use the removal options to clear them. Keys and tokens stay masked. Saved destinations are shown so you can check them. Developer server mode uses its own .env.local instead.</p>

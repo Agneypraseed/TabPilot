@@ -64,7 +64,7 @@
         attentionCards.delete(id);
       }
     for (const pending of requests) {
-      if (attentionCards.has(pending.id)) continue;
+      if (attentionCards.has(pending.id)) { renderAlertDelivery(attentionCards.get(pending.id), pending); continue; }
       const card = document.createElement("article");
       card.className = "attention-card";
       const title = document.createElement("h3");
@@ -82,6 +82,11 @@
       const tabLabel = document.createElement("small");
       tabLabel.textContent = tabs.find(tab => tab.id === pending.tabId)?.title || `Tab ${pending.tabId}`;
       card.append(tabLabel, title, question, detail);
+      const delivery = document.createElement("p");
+      delivery.className = "help alert-delivery";
+      delivery.setAttribute("role", "status");
+      card.append(delivery);
+      renderAlertDelivery(card, pending);
       let input;
       if (pending.kind === "information") {
         input = document.createElement("textarea");
@@ -135,6 +140,21 @@
       attentionCards.set(pending.id, card);
     }
     $("attention-requests").hidden = !requests.length;
+  }
+  function renderAlertDelivery(card, request) {
+    const element = card.querySelector(".alert-delivery");
+    if (!element) return;
+    const delivery = agent?.notificationDeliveries?.find(item => item.requestId === request.id);
+    const status = runtimeSettings.notificationStatus?.telegram;
+    const lines = (delivery?.results || []).map(item => {
+      const name = item.channel === "telegram" ? "Telegram" : "Email";
+      return item.status === "sending" ? `${name}: sending alert…`
+        : item.accepted ? `${name} accepted the alert. Reply here in TabPilot.`
+        : `${name} alert failed: ${item.error || "Check the channel settings."}`;
+    });
+    if (!lines.length && status?.invalid) lines.push("Telegram alert was not sent: the saved bot token or chat ID has an invalid format. Check Settings.");
+    element.textContent = lines.join(" ");
+    element.hidden = !lines.length;
   }
   const labels = {
     request_user_help: "Asking for your help",
@@ -441,6 +461,7 @@
     const local = executionMode === "extension";
     $("extension-credentials").hidden = !local;
     $("notification-settings").hidden = !local;
+    $("test-telegram").disabled = !connected || !local;
     $("credential-storage").hidden = !local;
     $("developer-bridge").hidden = local;
     $("apply-execution-mode").disabled = active();
@@ -451,7 +472,7 @@
         ? "Saved on this device, including after restarting Chrome. New chats and switching tabs keep these settings."
         : "Saved for this browser session. New chats and switching tabs keep these settings. Enable Remember credentials below to keep them after restarting Chrome.";
     for (const [id, name] of Object.entries(credentialInputs)) renderSavedCredential(id, fields.includes(name), runtimeSettings.savedValues?.[name]);
-    $("telegram-status").textContent = ["TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID"].every(name => fields.includes(name))
+    $("telegram-status").textContent = runtimeSettings.notificationStatus?.telegram?.invalid ? "Saved Telegram settings have an invalid format. Use the raw bot token and a numeric chat ID, then send a test alert." : ["TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID"].every(name => fields.includes(name))
       ? "Telegram settings saved. The bot must have received /start from this chat."
       : "Add a bot token and chat ID. Send /start to your bot first.";
     $("email-status").textContent = ["RESEND_API_KEY", "TABPILOT_EMAIL_FROM", "TABPILOT_EMAIL_TO"].every(name => fields.includes(name))
@@ -1009,6 +1030,15 @@
     } catch (error) {
       notice(error.message);
     }
+  });
+  $("test-telegram").addEventListener("click", async () => {
+    $("test-telegram").disabled = true;
+    try {
+      const result = await command("notification-test", { channel: "telegram" });
+      const accepted = result.notification?.accepted === true;
+      notice(accepted ? "Telegram accepted the test alert. Check the saved chat or channel." : result.notification?.results?.[0]?.error || result.notification?.error || "The Telegram test failed. Check Settings.", accepted);
+    } catch (error) { notice(error.message); }
+    finally { $("test-telegram").disabled = false; }
   });
   $("test-alert").addEventListener("click", async () => {
     try {

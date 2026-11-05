@@ -21,6 +21,7 @@ export class TaskManager {
         this.maxConcurrent = maxConcurrent;
         this.notifications = notifications;
         this.pendingNotifications = new Set();
+        this.notificationDeliveries = new Map();
         this.sessionId = randomUUID();
         this.traceStore = serviceOptions.traceStore;
         this.listeners = new Set();
@@ -65,23 +66,40 @@ export class TaskManager {
         const base = service?.snapshot() ?? preferences;
         return { ...base, settings: preferences.settings, providers: preferences.providers, sessionId: this.sessionId, revision: this.revision,
             ...(selected?.status === "paused" && !service?.active ? { status: "needs-review" } : {}),
-            selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning, notificationWarning: this.notificationWarning,
+            selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning, notificationWarning: this.notificationWarning, notificationDeliveries: [...this.notificationDeliveries.values()],
             requests: [...this.sessions.values()].flatMap(session => session.snapshot().requests),
             jobs: [...this.records.values()].filter(record => this.visible(record)).map(({ checkpoint, ...record }) => ({ ...record,
                 activity: this.sessions.get(record.id)?.state.events.findLast(event => event.kind === "tool" || event.kind === "status")?.text,
                 needsRebind: record.scope !== this.connection.scope })) };
     }
     emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
-    notify(input) {
+    notify(input, context = {}) {
         if (!this.notifications) return;
-        const pending = Promise.resolve().then(() => {
+        const id = context.requestId ?? context.taskId ?? randomUUID();
+        const update = results => {
+            this.notificationDeliveries.set(id, { ...context, results, updatedAt: this.now() });
+            while (this.notificationDeliveries.size > 100) this.notificationDeliveries.delete(this.notificationDeliveries.keys().next().value);
+            this.emit();
+        };
+        const pending = Promise.resolve().then(async () => {
             const status = this.notifications.status();
-            if (!Object.values(status).some(channel => channel.configured)) return { accepted: true };
-            return this.notifications.send(input);
-        }).then(result => {
-            if (!result.accepted) throw new Error("Notification was not accepted.");
+            const channels = Object.keys(status).filter(name => status[name].configured);
+            if (!channels.length) {
+                const invalid = Object.keys(status).filter(name => status[name].invalid);
+                if (!invalid.length) return;
+                update(invalid.map(channel => ({ channel, accepted: false, error: 'Saved channel settings are invalid. Check the token and destination in Settings.' })));
+                throw new Error('Invalid notification settings.');
+            }
+            update(channels.map(channel => ({ channel, status: 'sending' })));
+            const result = await this.notifications.send(input);
+            update(result.results ?? channels.map(channel => ({ channel, accepted: result.accepted })));
+            if (!result.accepted) throw new Error('Notification was not accepted.');
         }).catch(() => {
-            this.notificationWarning = "A task notification failed or its delivery is unknown. Check notification settings and the provider before retrying.";
+            const previous = this.notificationDeliveries.get(id);
+            if (previous?.results.some(item => item.status === 'sending')) {
+                update(previous.results.map(item => ({ channel: item.channel, accepted: false, error: 'Delivery is unknown. Check Telegram before retrying.' })));
+            }
+            this.notificationWarning = 'A task notification failed or its delivery is unknown. Check the alert status beside the request or use Send test alert in Settings.';
             this.emit();
         });
         this.pendingNotifications.add(pending);
@@ -229,7 +247,7 @@ export class TaskManager {
                 if (notifiedRequests.has(request.id)) continue;
                 notifiedRequests.add(request.id);
                 this.notify({ subject: request.kind === "approval" ? "TabPilot needs your permission" : "TabPilot needs your input",
-                    message: `Task: ${record.id}\nTab: ${record.tabId}\nRequest: ${request.id}\n\n${request.question.slice(0, 2400)}\n\nOpen TabPilot to review and respond. This notification does not grant approval. Expires: ${new Date(request.expiresAt).toISOString()}` });
+                    message: `Task: ${record.id}\nTab: ${record.tabId}\nRequest: ${request.id}\n\n${request.question.slice(0, 2400)}\n\nOpen TabPilot to review and respond. This notification does not grant approval. Expires: ${new Date(request.expiresAt).toISOString()}` }, { requestId: request.id, taskId: record.id });
             }
             record.status = ["needs-input", "waiting-for-worker"].includes(state.status) ? state.status : ["paused", "pausing"].includes(state.status) ? "paused" : "running";
             void this.save(record).catch(error => { this.schedulerWarning = error.message; });
@@ -321,7 +339,7 @@ export class TaskManager {
             if (!terminal.has(record.status)) { record.status = "paused"; record.summary = "Continuation limit reached. Review progress and resume explicitly."; }
             await this.save(record);
             if (record.status === "completed" && !record.parentTaskId) this.notify({ subject: "TabPilot task completed",
-                message: `Task: ${record.id}\nTab: ${record.tabId}\n\n${record.summary || "Verified completion recorded."}`.slice(0, 3000) });
+                message: `Task: ${record.id}\nTab: ${record.tabId}\n\n${record.summary || "Verified completion recorded."}`.slice(0, 3000) }, { taskId: record.id });
             if (record.status === "completed" && record.repeatEveryMs && !record.cancelled) {
                 await this.create({ ...this.input(record), notBefore: this.now() + record.repeatEveryMs }, { seriesId: record.seriesId ?? record.id });
             }

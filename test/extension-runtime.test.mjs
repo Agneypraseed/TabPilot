@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { IDBFactory } from 'fake-indexeddb';
+import { ExtensionDatabaseStorage } from '../extension-database.mjs';
 import { Usage, RunContext } from '@openai/agents';
 import { createExtensionRuntime } from '../extension-runtime.mjs';
 
@@ -156,4 +158,60 @@ test('global settings and notification destinations survive a task, new chat, ta
  assert.equal(reopened.snapshot().runtime.savedValues.TABPILOT_TELEGRAM_CHAT_ID,'12345');
  await reopened.command('runtime-configure',{clearCredentials:['OPENAI_API_KEY']});
  assert.equal(reopened.snapshot().providers.find(provider=>provider.id==='openai').configured,false);
+});
+
+
+test('automatic intervention alerts expose Telegram acceptance or rejection without exposing provider bodies',async t=>{
+ for(const accepted of [true,false]) {
+  const f=fixture();let sends=0;
+  const runtime=await createExtensionRuntime({...f,notificationFetch:async(url)=>{
+    assert.equal(new URL(url).hostname,'api.telegram.org');sends++;
+    return accepted?Response.json({ok:true,result:{message_id:10}}):new Response('private bot token must not appear',{status:403});
+  },configure:async()=>({model:{},modelSettings:{},close:async()=>{}}),run:async(_prompt,options)=>{
+    await options.requestHuman({kind:'information',question:'Which title?',detail:'Test intervention'});
+    await options.extraTools.find(tool=>tool.name==='complete_task').invoke(new RunContext(),JSON.stringify({summary:'Title observed',evidence:'Fixture title verified'}));return {answer:'Done',history:[]};
+  }});t.after(()=>runtime.close());
+  await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret,TELEGRAM_BOT_TOKEN:'123456:test-token-fixture',TABPILOT_TELEGRAM_CHAT_ID:'12345'}});
+  await runtime.command('task-create',{prompt:'Read and ask',tabId:12,mode:'browser',maxStages:1,allowResearch:false});
+  await until(()=>runtime.snapshot().notificationDeliveries.some(item=>item.results[0]?.accepted!==undefined));
+  const request=runtime.snapshot().requests[0];const result=runtime.snapshot().notificationDeliveries.find(item=>item.requestId===request.id).results[0];
+  assert.equal(result.accepted,accepted);assert.equal(sends,1);assert.equal(runtime.manager.active,true);
+  if(!accepted)assert.match(result.error,/HTTP 403/);
+  assert.ok(!JSON.stringify(runtime.snapshot()).includes('private bot token'));
+  await runtime.command('human-response',{id:request.id,runId:request.runId,decision:'answer',text:'Title only'});
+  await until(()=>!runtime.manager.active&&sends===2);
+  assert.equal(runtime.snapshot().jobs[0].status,'completed');
+ }
+});
+
+test('Telegram settings test reports invalid configuration without a network send',async t=>{
+ const f=fixture();const runtime=await createExtensionRuntime({...f,notificationFetch:async()=>assert.fail('Invalid settings cannot send')});t.after(()=>runtime.close());
+ await runtime.command('runtime-configure',{credentials:{TELEGRAM_BOT_TOKEN:'bot123:wrong-format',TABPILOT_TELEGRAM_CHAT_ID:'@wrong-destination'}});
+ assert.equal(runtime.snapshot().runtime.notificationStatus.telegram.invalid,true);
+ const result=await runtime.command('notification-test',{channel:'telegram'});
+ assert.equal(result.notification.accepted,false);assert.match(result.notification.results[0].error,/not configured/);
+});
+
+
+test('IndexedDB runtime preserves legacy tasks and sends completion alerts after saving checkpoints beyond the old 2 MiB limit',async t=>{
+ const f=fixture();const legacy={id:randomUUID(),scope:f.scope,profileId:f.profileId,tabId:34,prompt:'Legacy saved task',mode:'browser',createdAt:1,status:'completed'};
+ f.data.local['extension.tasks.v1']=[legacy];
+ const database=new ExtensionDatabaseStorage({indexedDB:new IDBFactory(),name:'runtime-large-'+randomUUID()});let sends=0;
+ const runtime=await createExtensionRuntime({...f,dataStorage:database,notificationFetch:async()=>{sends++;return Response.json({ok:true,result:{message_id:sends}});},configure:async()=>({model:{},modelSettings:{},close:async()=>{}}),run:async(_prompt,options)=>{
+  await options.requestHuman({kind:'information',question:'Which title?',detail:'A controlled test'});
+  await options.extraTools.find(tool=>tool.name==='complete_task').invoke(new RunContext(),JSON.stringify({summary:'Title verified',evidence:'Read current page title'}));
+  return {answer:'Title verified',history:[{role:'assistant',content:'page observation '.repeat(200000)}]};
+ }});t.after(()=>runtime.close());
+ await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret,TELEGRAM_BOT_TOKEN:'123456:test-token-fixture',TABPILOT_TELEGRAM_CHAT_ID:'12345'}});
+ await runtime.command('task-create',{prompt:'Read and ask',tabId:12,mode:'browser',maxStages:1,allowResearch:false});
+ await until(()=>sends===1&&runtime.snapshot().requests.length===1);
+ const request=runtime.snapshot().requests[0];
+ await runtime.command('human-response',{id:request.id,runId:request.runId,decision:'answer',text:'Main heading'});
+ await until(()=>!runtime.manager.active&&sends===2);
+ const records=(await database.get('extension.tasks.v1'))['extension.tasks.v1'];
+ const result=records.find(record=>record.id!==legacy.id);
+ assert.equal(result.status,'completed');assert.ok(JSON.stringify(result.checkpoint).length>2*1024*1024);
+ assert.equal(records.find(record=>record.id===legacy.id).prompt,legacy.prompt);
+ assert.deepEqual(f.data.local['extension.tasks.v1'],[legacy],'Original migration source remains intact');
+ assert.equal(runtime.snapshot().notificationWarning,undefined);
 });
