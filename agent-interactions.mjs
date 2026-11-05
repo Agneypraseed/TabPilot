@@ -5,9 +5,9 @@ export function humanHelpTool(requestHuman) {
   return tool({
     name: "request_user_help",
     description:
-      "Pause this task for the user. Use handoff for CAPTCHAs, login, native dialogs or actions only the user can perform; information for a missing fact or choice. Do not solve or bypass a CAPTCHA yourself. The task waits and receives the user's actual reply before continuing.",
+      "Pause this task for the user. Use handoff for CAPTCHAs, login, native dialogs or actions only the user can perform; information for a missing fact or choice; approval for a consequential visual or contextual action that the ordinary labeled-button approval check cannot identify. Do not ask for routine searching, navigation, clicks or form preparation. Clearly labeled consequential buttons already have a tool approval check. Do not solve or bypass a CAPTCHA yourself. The task waits and receives the user's actual reply before continuing.",
     parameters: z.object({
-      kind: z.enum(["handoff", "information"]),
+      kind: z.enum(["handoff", "information", "approval"]),
       question: z.string().min(1).max(3000),
       detail: z.string().max(6000),
     }),
@@ -28,6 +28,8 @@ export function humanHelpTool(requestHuman) {
 export function browserApprovalPolicy({ requestHuman, mode = "important", downloadDirectory }) {
   const targets = new Map();
   const verificationPages = new Map();
+  const dialogs = new Map();
+  const consequential = /\b(pay|purchase|buy|checkout|place (?:an? |the )?order|confirm (?:an? |the )?(?:order|payment|purchase|booking)|book now|delete|erase|permanently|send|publish|post (?:now|comment|reply)|sign (?:contract|agreement)|accept (?:contract|agreement)|transfer (?:money|funds)|(?:change|reset) password|disable (?:security|two.factor)|(?:close|remove) (?:my |your |the )?(?:account|files?|records?))\b/i;
   return {
     afterTool(name, args, result) {
       const snapshot =
@@ -37,6 +39,8 @@ export function browserApprovalPolicy({ requestHuman, mode = "important", downlo
           args?.tabId,
           new Map(snapshot.elements.map((element) => [element.ref, element])),
         );
+      if (snapshot && typeof snapshot === "object" && (snapshot.elements || snapshot.dialog))
+        dialogs.set(args?.tabId, snapshot.dialog);
       if (typeof snapshot?.text === "string") verificationPages.set(args?.tabId,
         snapshot.text.length < 2500 && /(^|\n)\s*(verify (?:that )?you(?:'re| are) human|complete (?:the )?captcha|i(?:'m| am) not a robot)[.!?\s]*(\n|$)/im.test(snapshot.text));
     },
@@ -53,21 +57,15 @@ export function browserApprovalPolicy({ requestHuman, mode = "important", downlo
       ].includes(name);
       if (read) return;
       const target = targets.get(args?.tabId)?.get(args?.ref);
-      const label = target?.name || target?.role || "the page";
+      const label = target?.name || target?.role || (name === "browser_dialog" ? dialogs.get(args?.tabId)?.message : null) || "the page";
       const manual = /^(i(?:'m| am) not a robot|verify (?:that )?you(?:'re| are) human)[.!?\s]*$/i.test(label) || verificationPages.get(args?.tabId);
       if (manual && ["browser_click", "browser_fill", "browser_select", "browser_press", "browser_pointer"].includes(name)) {
         const response = await requestHuman({ kind: "handoff", question: "Please handle the human-verification challenge in this browser tab.", detail: "The agent will not click or solve the challenge. Choose Done only after you have handled it in the browser." });
         return { isError: true, content: [{ type: "text", text: response.decision === "done" ? "The user handled verification. Do not execute the old proposed action; take a fresh snapshot before continuing." : "The user declined the verification handoff. Stop or ask for another approach." }] };
       }
       const important =
-        ["browser_close", "browser_download", "browser_download_local"].includes(name) ||
-        (name === "browser_press" && /(^|\+)enter$/i.test(args?.key ?? "")) ||
-        (name === "browser_pointer" &&
-          [undefined, "click", "drag"].includes(args?.kind)) ||
-        (["browser_click", "browser_press"].includes(name) &&
-          /\b(pay|purchase|buy|checkout|place order|delete|remove|send|submit|confirm|publish|sign|agree)\b/i.test(
-            label,
-          ));
+        (["browser_click", "browser_press"].includes(name) && consequential.test(label)) ||
+        (name === "browser_dialog" && args?.accept === true && consequential.test(label));
       if (mode !== "every-action" && !important) return;
       const description = `${name.replace(/^browser_/, "")} ${args?.ref ? `“${label}”` : name === "browser_press" ? `“${args.key}” in this tab` : name === "browser_pointer" ? `at image coordinates (${args.x}, ${args.y})` : "in this tab"}`;
       const result = await requestHuman({

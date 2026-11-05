@@ -1,13 +1,13 @@
 import test from "node:test";
-test("download approval identifies exact URL and location and status does not ask again", async () => {
+test("optional every-action mode identifies exact download URL and location and status does not ask again", async () => {
     const requests = [];
-    const policy = browserApprovalPolicy({ requestHuman: async request => { requests.push(request); return { decision: "approve" }; } });
+    const policy = browserApprovalPolicy({ mode: "every-action", requestHuman: async request => { requests.push(request); return { decision: "approve" }; } });
     await policy.beforeTool("browser_download", { tabId: 12, url: "https://example.com/report.pdf", filename: "research/report.pdf", saveAs: false });
     assert.match(requests[0].detail, /https:\/\/example.com\/report.pdf/);
     assert.match(requests[0].detail, /Downloads\/research\/report.pdf/);
     await policy.beforeTool("browser_download_status", { tabId: 12, downloadId: 9 });
     assert.equal(requests.length, 1);
-    const local = browserApprovalPolicy({ downloadDirectory: "D:\\Reports", requestHuman: async request => { requests.push(request); return { decision: "deny" }; } });
+    const local = browserApprovalPolicy({ mode: "every-action", downloadDirectory: "D:\\Reports", requestHuman: async request => { requests.push(request); return { decision: "deny" }; } });
     const denied = await local.beforeTool("browser_download_local", { tabId: 12, url: "https://example.com/report.pdf", filename: "study/report.pdf" });
     assert.equal(denied.isError, true);
     assert.match(requests[1].detail, /D:\\Reports/);
@@ -19,6 +19,39 @@ import { randomUUID } from "node:crypto";
 import { HumanRequests, ActiveRunBudget } from "../human-requests.mjs";
 import { browserApprovalPolicy } from "../agent-interactions.mjs";
 import { observedBrowserServer } from "../agent-browser-session.mjs";
+
+test("consequential-only mode allows routine searches, Enter, pointer actions and task preparation", async () => {
+    const requests = [];
+    const policy = browserApprovalPolicy({ requestHuman: async request => { requests.push(request); return { decision: "approve" }; } });
+    policy.afterTool("browser_snapshot", { tabId: 12 }, { structuredContent: { elements: [
+        { ref: "search", name: "Google Search" }, { ref: "submit", name: "Submit" },
+        { ref: "confirm", name: "Confirm" }, { ref: "remove", name: "Remove filter" },
+    ] } });
+    for (const [name, args] of [
+        ["browser_click", { ref: "search" }], ["browser_click", { ref: "submit" }],
+        ["browser_click", { ref: "confirm" }], ["browser_click", { ref: "remove" }],
+        ["browser_press", { key: "Enter" }], ["browser_press", { ref: "search", key: "Enter" }],
+        ["browser_pointer", { x: 100, y: 100 }], ["browser_pointer", { kind: "drag", x: 100, y: 100 }],
+        ["browser_fill", { ref: "search", text: "testing my agent" }],
+        ["browser_close", {}], ["browser_download", { url: "https://example.com/report.pdf" }],
+        ["browser_download_local", { url: "https://example.com/report.pdf" }],
+    ]) assert.equal(await policy.beforeTool(name, { tabId: 12, ...args }), undefined);
+    assert.equal(requests.length, 0);
+});
+
+test("consequential buttons and destructive confirmation dialogs still wait for approval", async () => {
+    const requests = [];
+    const policy = browserApprovalPolicy({ requestHuman: async request => { requests.push(request); return { decision: "deny" }; } });
+    for (const label of ["Pay now", "Place order", "Confirm booking", "Delete record", "Send message", "Publish", "Change password", "Close account"]) {
+        policy.afterTool("browser_snapshot", { tabId: 12 }, { structuredContent: { elements: [{ ref: "danger", name: label }] } });
+        assert.equal((await policy.beforeTool("browser_click", { tabId: 12, ref: "danger" })).isError, true);
+    }
+    assert.equal(requests.length, 8);
+    policy.afterTool("browser_snapshot", { tabId: 12 }, { structuredContent: { elements: [], dialog: { message: "Delete this record permanently?" } } });
+    assert.equal(await policy.beforeTool("browser_dialog", { tabId: 12, accept: false }), undefined);
+    assert.equal((await policy.beforeTool("browser_dialog", { tabId: 12, accept: true })).isError, true);
+    assert.equal(requests.length, 9);
+});
 
 test("human requests are scoped, single-use, and distinguish approval from manual handoff", async () => {
     const broker = new HumanRequests();

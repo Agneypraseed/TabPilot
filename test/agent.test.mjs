@@ -185,14 +185,16 @@ test("Stop aborts a paused SDK run without dispatching the pending browser actio
     assert.equal(service.history.length, 0);
 });
 
-test("SDK human-help tool waits for a real reply then resumes the same task", { timeout: 15000 }, async () => {
+for (const kind of ["information", "approval"]) test(`SDK human-help tool waits for a real ${kind} reply then resumes the same task`, { timeout: 15000 }, async () => {
     const archived = [];
     const scope = "d215b83a-cf77-4afc-a638-bf5233d0cfdd";
     let turns = 0;
+    const question = kind === "information" ? "Which exhibit should I inspect?" : "Approve publishing the prepared exhibit report?";
+    const expected = kind === "information" ? "Space exhibit" : "approve";
     const model = {
         async getResponse(request) {
-            if (++turns === 1) return call("request_user_help", { kind: "information", question: "Which exhibit should I inspect?", detail: "Choose a topic." }, turns);
-            assert.match(JSON.stringify(request.input), /Space exhibit/);
+            if (++turns === 1) return call("request_user_help", { kind, question, detail: "Review this request." }, turns);
+            assert.ok(JSON.stringify(request.input).includes(expected));
             return { usage: new Usage({ requests: 1 }), output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "I will inspect the Space exhibit." }] }] };
         }, async *getStreamedResponse() {}
     };
@@ -206,15 +208,17 @@ test("SDK human-help tool waits for a real reply then resumes the same task", { 
     const request = await waiting;
     assert.equal(service.state.status, "needs-input");
     assert.equal(turns, 1);
-    await service.command("human-response", { id: request.id, runId: request.runId, scope, decision: "answer", text: "Space exhibit" });
+    assert.equal(request.kind, kind);
+    await service.command("human-response", { id: request.id, runId: request.runId, scope,
+        ...(kind === "information" ? { decision: "answer", text: "Space exhibit" } : { decision: "approve" }) });
     await service.running;
     assert.equal(service.state.status, "completed");
     assert.equal(service.humanRequests.list().length, 0);
-    assert.match(JSON.stringify(service.history), /Space exhibit/);
+    assert.ok(JSON.stringify(service.history).includes(expected));
     const tools = archived.filter(event => event.tool === "request_user_help");
     assert.deepEqual(tools.map(event => event.phase), ["running", "complete"]);
     assert.equal(tools[0].callId, tools[1].callId);
     assert.equal(tools[0].callId, "call-1");
-    assert.equal(tools[0].arguments.question, "Which exhibit should I inspect?");
-    assert.equal(tools[1].result.text, "Space exhibit");
+    assert.equal(tools[0].arguments.question, question);
+    assert.equal(tools[1].result.decision, kind === "information" ? "answer" : "approve");
 });
