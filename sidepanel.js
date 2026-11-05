@@ -8,6 +8,8 @@
   let contextWindowId = sourceWindow && /^\d+$/.test(sourceWindow)
     ? Number(sourceWindow)
     : null;
+  let incognitoWindow = chrome.extension?.inIncognitoContext === true;
+  let contextWindowPromise;
   const initialTab = Number(params.get("tab"));
   let initialTarget = true;
   let connected = false,
@@ -416,12 +418,16 @@
       : "Add this provider’s API key to .env.local and restart the bridge.";
   }
   async function resolveContextWindow() {
-    if (Number.isInteger(contextWindowId)) return contextWindowId;
-    try {
-      const current = await chrome.windows?.getCurrent?.();
-      if (Number.isInteger(current?.id)) contextWindowId = current.id;
-    } catch {}
-    return contextWindowId;
+    return contextWindowPromise ??= (async () => {
+      try {
+        const current = Number.isInteger(contextWindowId)
+          ? await chrome.windows?.get?.(contextWindowId)
+          : await chrome.windows?.getCurrent?.();
+        if (Number.isInteger(current?.id)) contextWindowId = current.id;
+        incognitoWindow ||= current?.incognito === true;
+      } catch {}
+      return contextWindowId;
+    })();
   }
   async function refreshTabs(preferActive = false, activeTabId) {
     const activeQuery = Number.isInteger(contextWindowId)
@@ -432,7 +438,13 @@
       TabPilotTabAccess.read(chrome),
       preferActive && activeTabId === undefined ? chrome.tabs.query(activeQuery) : [],
     ]);
-    tabs = available.filter((tab) => TabPilotTabAccess.supported(tab.url));
+    incognitoWindow ||= available.some(tab => tab.windowId === contextWindowId && tab.incognito === true);
+    tabs = available.filter((tab) => TabPilotTabAccess.supported(tab.url) &&
+      (!incognitoWindow || (Number.isInteger(contextWindowId) && tab.windowId === contextWindowId)));
+    $("tab-access-help").textContent = incognitoWindow
+      ? "Only web tabs in this incognito window are shown. Revoke access for any tab below."
+      : "All web tabs have access by default. Revoke access for any tab below. Chrome-protected pages are unavailable.";
+    $("settings-tab-list").setAttribute("aria-label", incognitoWindow ? "Access for this incognito window" : "Access for all open web tabs");
     const oldId = selected?.id;
     const oldTab = tabs.find((tab) => tab.id === oldId);
     const contextTabs = Number.isInteger(contextWindowId)
@@ -717,12 +729,14 @@
           type: "popup",
           width: 440,
           height: 880,
+          ...(incognitoWindow ? { incognito: true } : {}),
         });
       } catch {
         query.set("layout", "tab");
         await chrome.tabs.create({
           url: chrome.runtime.getURL(`sidepanel.html?${query}`),
           active: true,
+          ...(incognitoWindow && Number.isInteger(contextWindowId) ? { windowId: contextWindowId } : {}),
         });
       }
     } catch (error) {

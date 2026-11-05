@@ -36,7 +36,7 @@ test("Tasks keeps workers with their parent tab, safely renders prompts, and sub
     assert.equal(payload.allowResearch, false);
     assert.equal($("schedule-prompt").value, "");
 });
-async function panel({ initialActiveTab = 12 } = {}) {
+async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "" } = {}) {
     const { window, document } = parseHTML(html);
     // linkedom implements selected options but not HTMLSelectElement.value's setter.
     for (const select of document.querySelectorAll("select")) Object.defineProperty(select, "value", {
@@ -49,8 +49,8 @@ async function panel({ initialActiveTab = 12 } = {}) {
     const agent = { revision: 1, status: "idle", runId: "run-1", events: [], historyAvailable: true, historyRevision: 0, settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
     const event = { addListener() {} };
     const chrome = {
-        tabs: { query: async query => { queries.push(query); const available = [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 8, title: "Other tab", url: "https://other.example/" }]; return query.active ? available.filter(tab => tab.id === initialActiveTab && (!query.windowId || tab.windowId === query.windowId)) : available; }, create: async args => calls.push({ createdTab: args }), onActivated: { addListener(fn) { activationListeners.push(fn); } }, onUpdated: event, onRemoved: event },
-        windows: { getCurrent: async () => ({ id: 7 }) },
+        tabs: { query: async query => { queries.push(query); const available = [{ id: 12, windowId: 7, incognito, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 8, title: "Other tab", url: "https://other.example/" }, ...extraTabs]; return query.active ? available.filter(tab => tab.id === initialActiveTab && (!query.windowId || tab.windowId === query.windowId)) : available; }, create: async args => calls.push({ createdTab: args }), onActivated: { addListener(fn) { activationListeners.push(fn); } }, onUpdated: event, onRemoved: event },
+        windows: { getCurrent: async () => ({ id: 7, incognito }), get: async id => ({ id, incognito }) },
         storage: { session: { get: async () => stored }, onChanged: event },
         runtime: { getURL: path => `chrome-extension://test/${path}`, onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
             calls.push(message);
@@ -65,7 +65,7 @@ async function panel({ initialActiveTab = 12 } = {}) {
             return { ok: true };
         } }
     };
-    vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, location: { search: "" }, setInterval: () => 1, clearInterval, Date });
+    vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, location: { search }, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
     return { document, calls, queries, dispatch, agent, chrome, activate: info => activationListeners.forEach(listener => listener(info)), receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
@@ -233,4 +233,34 @@ test("tab activations in a different window do not change this workspace's selec
     ui.activate({ tabId: 34, windowId: 8 });
     await flush(); await flush();
     assert.equal(ui.document.getElementById("target-tab").value, "12");
+});
+
+test("incognito chooser and Settings show existing and new tabs only from their source window", async () => {
+    const extraTabs = [
+        { id: 56, windowId: 7, incognito: true, title: "Private source", url: "https://private.example/" },
+        { id: 78, windowId: 9, incognito: true, title: "Other private window", url: "https://elsewhere.example/" },
+    ];
+    const ui = await panel({ incognito: true, extraTabs, search: "?window=7&tab=12" });
+    const $ = id => ui.document.getElementById(id);
+    const ids = () => [...$("target-tab").querySelectorAll("option")].map(option => option.value);
+    assert.deepEqual(ids(), ["12", "56"]);
+    await ui.dispatch("settings-button");
+    assert.equal($("settings-tab-list").querySelectorAll(".tab-access-row").length, 2);
+    assert.doesNotMatch($("settings-tab-list").textContent, /Other tab|Other private window/);
+    assert.match($("tab-access-help").textContent, /this incognito window/);
+    extraTabs.push({ id: 90, windowId: 7, incognito: true, title: "New private tab", url: "https://new.example/" });
+    await ui.dispatch("refresh-tabs");
+    assert.deepEqual(ids(), ["12", "56", "90"]);
+});
+
+test("opening an incognito workspace preserves its window context in both layouts", async () => {
+    const ui = await panel({ incognito: true });
+    let createdWindow;
+    ui.chrome.windows.create = async options => { createdWindow = options; };
+    await ui.dispatch("open-window");
+    assert.equal(createdWindow.incognito, true);
+    assert.match(createdWindow.url, /window=7&tab=12/);
+    ui.chrome.windows.create = async () => { throw new Error("Unsupported"); };
+    await ui.dispatch("open-window");
+    assert.equal(ui.calls.find(call => call.createdTab).createdTab.windowId, 7);
 });
