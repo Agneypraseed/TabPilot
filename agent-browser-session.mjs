@@ -1,7 +1,7 @@
 // Adapt the existing MCP client for a visible, interruptible, single-tab run.
 // CLI/MCP callers that do not opt in keep their existing behavior.
 export function observedBrowserServer(server, {
-    signal, targetTabId, mode = "browser", checkpoint = async () => {},
+    signal, targetTabId, checkpoint = async () => {},
     hasSteering = () => false, onActivity = () => {}, onObservation = () => {},
     beforeTool = async () => {}, afterTool = () => {}
 } = {}) {
@@ -27,18 +27,6 @@ export function observedBrowserServer(server, {
         onActivity({ tool: name, phase: result.isError ? "error" : "complete" });
         const image = result.content?.find(item => item.type === "image");
         if (image) onObservation({ ...image, tabId: args?.tabId });
-        // Capture only between actions, so observing does not invalidate the image
-        // coordinates of a pointer operation that has not executed yet.
-        if (mode === "computer" && !result.isError && args?.tabId !== undefined &&
-            !["browser_screenshot", "browser_close", "browser_open", "browser_download_local_status"].includes(name)) {
-            signal?.throwIfAborted();
-            const visual = await server.callToolResult("browser_screenshot", { tabId: args.tabId }, null, { signal });
-            const shot = visual.content?.find(item => item.type === "image");
-            if (shot) {
-                onObservation({ ...shot, tabId: args.tabId });
-                return { ...result, content: [...result.content, ...visual.content] };
-            }
-        }
         return result;
     };
     let queue = Promise.resolve();

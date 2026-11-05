@@ -12,7 +12,7 @@ TabPilot keeps browser execution, pairing, schedules, and history on the local m
 
 ## Highlights
 
-- **Two ways to work:** a DOM-oriented Browser agent and screenshot-driven Computer use.
+- **One agent flow:** the agent chooses page elements, screenshots, and pointer actions as the task requires.
 - **Human control:** tab-by-tab access revocation, action approvals, requests for help, and pause, resume, and stop controls.
 - **Long-running tasks:** schedules, a coordinator with parallel research specialists, download tracking, and per-tab activity history.
 - **Flexible integrations:** the included agent, CLI, and MCP tools use the same local browser bridge; the agent supports Meta, OpenAI, Gemini, Claude, and compatible APIs.

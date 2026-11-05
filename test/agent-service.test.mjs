@@ -89,7 +89,10 @@ test("visible MCP adapter restricts tab scope, cancels obsolete actions, returns
     assert.equal((await server.callToolResult("browser_click", { tabId: 1 })).isError, true);
     steer = false;
     const result = await server.callToolResult("browser_click", { tabId: 1 });
-    assert.equal(result.content.at(-1).data, "pixels");
+    assert.equal(result.content[0].text, "changed");
+    assert.equal(images.length, 0, "legacy computer mode does not force a screenshot after every action");
+    const visual = await server.callToolResult("browser_screenshot", { tabId: 1 });
+    assert.equal(visual.content.at(-1).data, "pixels");
     assert.equal(images.length, 1);
     assert.deepEqual(calls.map(c => c[0]), ["browser_tabs", "browser_click", "browser_screenshot"]);
 });

@@ -383,14 +383,6 @@ h3 {
 .access-button[aria-checked="true"] .switch-track:after {
   transform: translateX(14px);
 }
-.mode-switch {
-  display: flex;
-  border: 1px solid var(--line);
-  background: #f4f5f8;
-  border-radius: var(--radius);
-  margin: 0 20px 10px;
-  padding: 3px;
-}
 .view-tabs {
   display: flex;
   gap: 22px;
@@ -525,20 +517,13 @@ h3 {
 #history-back {
   margin: 4px 0 12px;
 }
-.mode-switch button {
-  border: 0;
-  background: transparent;
-  flex: 1;
-  font-weight: 600;
-  font-size: 12px;
-  white-space: nowrap;
-  padding: 8px 4px;
-  border-radius: 7px;
+.advanced-settings summary {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 650;
 }
-.mode-switch button[aria-pressed="true"] {
-  background: var(--blue);
-  color: white;
-  box-shadow: 0 1px 3px #223f9d20;
+.advanced-settings[open] summary {
+  margin-bottom: 14px;
 }
 #conversation {
   min-height: 0;
@@ -916,10 +901,6 @@ body.settings-open #new-chat {
     padding-left: 14px;
     padding-right: 14px;
     gap: 5px;
-  }
-  .mode-switch {
-    margin-left: 14px;
-    margin-right: 14px;
   }
   #conversation {
     padding-left: 14px;

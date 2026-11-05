@@ -71,7 +71,7 @@ async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [],
     return { document, calls, queries, dispatch, agent, chrome, activate: info => activationListeners.forEach(listener => listener(info)), receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
 }
 
-test("side panel defaults to access, supports revocation, submits task with mode and renders untrusted text safely", async () => {
+test("unified agent supports revocation, submits tasks and renders untrusted text safely", async () => {
     const ui = await panel();
     const $ = id => ui.document.getElementById(id);
     assert.equal($("send").disabled, false);
@@ -79,10 +79,11 @@ test("side panel defaults to access, supports revocation, submits task with mode
     assert.equal($("send").disabled, true);
     await ui.dispatch("access-toggle");
     assert.equal($("send").disabled, false);
-    await ui.dispatch("mode-computer");
+    assert.equal($("mode-switch"), null);
+    assert.equal(ui.document.querySelector(".advanced-settings").hasAttribute("open"), false);
     $("task").value = "Search <img src=x onerror=alert(1)>";
     await ui.dispatch("task-form", "submit");
-    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(c => c.method === "start").payload)), { prompt: "Search <img src=x onerror=alert(1)>", tabId: 12, mode: "computer", tabTitle: "Test <b>tab</b>" });
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(c => c.method === "start").payload)), { prompt: "Search <img src=x onerror=alert(1)>", tabId: 12, mode: "browser", tabTitle: "Test <b>tab</b>" });
     assert.equal($("messages").querySelector("img"), null);
     assert.match($("messages").textContent, /<img/);
     assert.equal($("target-tab").disabled, true);

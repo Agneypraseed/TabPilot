@@ -130,15 +130,6 @@
         <button id="tasks-tab" aria-pressed="false">Tasks</button>
         <button id="history-tab" aria-pressed="false">History</button>
       </nav>
-      <div
-        id="mode-switch"
-        class="mode-switch"
-        role="group"
-        aria-label="Agent mode"
-      >
-        <button id="mode-browser" aria-pressed="true">Browser agent</button
-        ><button id="mode-computer" aria-pressed="false">Computer use</button>
-      </div>
       <main id="conversation" tabindex="0" aria-label="Agent conversation">
         <section id="empty-state">
           <svg class="empty-mark"><use href="#i-tab" /></svg>
@@ -348,11 +339,12 @@
           <input id="download-directory" maxlength="1000" placeholder="Absolute folder path" />
           <p class="help">Used only when you explicitly choose a local-bridge download for a public page link. No browser cookies are forwarded. Chrome downloads still use Chrome’s normal destination.</p>
         </section>
-        <section class="settings-section">
-          <h3>Run limits</h3>
+        <details class="settings-section advanced-settings">
+          <summary>Advanced settings</summary>
+          <p class="help">Run limits bound time and model usage. A turn is a model round, which may include tool calls. Tasks can continue from saved progress between stages; reaching a limit does not mean the task succeeded.</p>
           <div class="field-grid">
             <div>
-              <label for="max-turns">Max turns</label
+              <label for="max-turns">Turns per stage</label
               ><input
                 id="max-turns"
                 type="number"
@@ -363,7 +355,7 @@
               />
             </div>
             <div>
-              <label for="timeout">Timeout</label
+              <label for="timeout">Active time per stage</label
               ><select id="timeout">
                 <option value="60000">1 minute</option>
                 <option value="180000">3 minutes</option>
@@ -373,7 +365,7 @@
               </select>
             </div>
           </div>
-        </section>
+        </details>
         <button id="save-settings" class="primary full-width">
           Save settings
         </button>

@@ -17,7 +17,6 @@ export async function runBrowserAgent(prompt, {
     signal = AbortSignal.timeout(300000),
     onToolCall = () => {},
     targetTabId,
-    mode = "browser",
     checkpoint = async () => {},
     getSteering = () => [],
     hasSteering = () => false,
@@ -54,24 +53,20 @@ export async function runBrowserAgent(prompt, {
             throw new Error("Enable access on the selected tab before starting a task.");
         }
         const policy = requestHuman ? browserApprovalPolicy({ requestHuman, mode: approvalMode, downloadDirectory }) : {};
-        const observed = observedBrowserServer(server, { signal, targetTabId, mode, checkpoint, hasSteering, onActivity, onObservation,
+        const observed = observedBrowserServer(server, { signal, targetTabId, checkpoint, hasSteering, onActivity, onObservation,
             beforeTool: policy.beforeTool, afterTool: policy.afterTool });
-        if (mode === "computer" && targetTabId !== undefined) {
-            await observed.callToolResult("browser_focus", { tabId: targetTabId });
-        }
 
         const agent = new Agent({
             name: "TabPilot browser agent",
             model,
             instructions: taskInstructions + (targetTabId !== undefined ? `Work only in selected tab ${targetTabId}. ` : "") +
                 (downloadDirectory ? `The configured local download folder is ${JSON.stringify(downloadDirectory)}. Local tools accept relative filenames only. If the user needs a different root folder, explain that they must set it in Settings before starting a new task. ` : "") +
-                (mode === "computer" ? "Computer use mode: inspect the screenshot observations after actions. Keep the controlled tab visible. " : "") +
                 (requestHuman ? "When you need missing information or cannot proceed, call request_user_help instead of ending the task with a question. Use handoff for CAPTCHAs, login, and native dialogs; let the user handle them in the browser. Never collect passwords, API keys, or one-time login codes in chat. Re-observe after the user's reply. Important proposed browser actions are gated by an explicit UI approval. " : "") +
                 "Complete the user's task in browser tabs with access. Web tabs have access by default, except tabs the user revokes in Settings. " +
                 "Use browser_tabs to discover tab IDs; never invent IDs. Plan a short sequence, act, inspect the returned state, and revise when needed. " +
                 "Start with browser_snapshot. Prefer semantic element refs for clicks, filling fields, and selection. " +
                 "Each new snapshot supersedes old refs. Actions return fresh snapshots: use those new refs for subsequent steps. Perform only one operation at a time on each tab. " +
-                "Use browser_screenshot when visual information is needed (canvas, layout, unlabeled controls) or to verify a visual result. " +
+                "Choose the observation and input tools that fit each step: use page text and semantic refs for ordinary controls, and browser_screenshot plus browser_pointer for canvas, layout, unlabeled controls, or visual verification. Focus the selected tab with browser_focus when visible interaction is needed. Inspect the result after actions; request a fresh screenshot when a visual action needs verification. " +
                 "You receive the screenshot IMAGE as well as metadata. browser_pointer coordinates are image pixels; use that screenshotId and recapture after page changes. " +
                 "Use browser_wait for asynchronous updates. On STALE_REF, TARGET_OBSCURED, or STALE_SCREENSHOT, observe again before retrying. " +
                 "For file downloads, inspect the page link and ask the user for a missing destination preference. browser_download saves a relative path under Downloads, or saveAs:true lets the user choose any location in Chrome's native dialog. Never invent an absolute path or bypass download warnings. A returned download ID means started, not completed: use browser_download_status to verify completion. If tracking reports a warning after start, do not start the same transfer again. " +

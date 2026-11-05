@@ -15,8 +15,9 @@
   let connected = false,
     agent = null,
     tabs = [],
-    selected = null,
-    mode = "browser";
+    selected = null;
+  // Retain the existing wire value for saved tasks and older bridges.
+  const mode = "browser";
   let settingsDirty = false,
     accessBusy = false,
     busy = false,
@@ -207,7 +208,7 @@
     workspaceView = view;
     $("history-view").hidden = view !== "history";
     $("tasks-view").hidden = view !== "tasks";
-    for (const id of ["mode-switch", "conversation", "composer-area"])
+    for (const id of ["conversation", "composer-area"])
       $(id).hidden = view !== "agent";
     $("agent-tab").setAttribute("aria-pressed", String(view === "agent"));
     $("history-tab").setAttribute("aria-pressed", String(view === "history"));
@@ -516,12 +517,6 @@
       selected?.enabled ? "enabled" : "disabled",
     );
     renderTabAccess();
-    $("mode-browser").setAttribute("aria-pressed", String(mode === "browser"));
-    $("mode-computer").setAttribute(
-      "aria-pressed",
-      String(mode === "computer"),
-    );
-    $("mode-browser").disabled = $("mode-computer").disabled = active();
     $("run-controls").hidden = !active();
     $("run-status").textContent =
       {
@@ -561,9 +556,7 @@
             ? "Answer the request above to continue."
             : active()
               ? "New guidance applies before the next action. Enter to send."
-              : mode === "computer"
-                ? "Watch it work in your tab. Pause any time."
-                : "Web tabs have access by default. Manage access in Settings.";
+              : "The agent chooses page and visual tools as needed. Pause any time.";
     $("save-settings").disabled = !connected || !agent || active();
     if (agent?.settings) {
       $("model-label").replaceChildren(
@@ -671,7 +664,6 @@
     )
       return;
     agent = state;
-    if (active()) mode = state.mode;
     fillSettings();
     renderControls();
     renderMessages();
@@ -779,11 +771,6 @@
   });
   for (const id of ["access-toggle"])
     $(id).addEventListener("click", toggleAccess);
-  for (const value of ["browser", "computer"])
-    $("mode-" + value).addEventListener("click", () => {
-      mode = value;
-      renderControls();
-    });
   $("pair-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     $("connect").disabled = true;
