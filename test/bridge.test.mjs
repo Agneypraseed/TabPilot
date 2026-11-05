@@ -265,6 +265,7 @@ test("real background handler enforces permissions through the bridge", async (t
         location: { href: "https://example.com/" } });
     mockDebugger(chrome, expression => { reads++; return vm.runInContext(expression, context); });
     vm.runInContext(backgroundSource, context);
+    vm.runInContext('executionMode = "bridge"', context);
     await vm.runInContext(`connectBridge("${token}")`, context);
 
     const tabs = await (await api.request("/tabs")).json();

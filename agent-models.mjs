@@ -1,3 +1,4 @@
+import OpenAI from "openai";
 import { OpenAIProvider } from "@openai/agents";
 import { aisdk } from "@openai/agents-extensions/ai-sdk";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
@@ -6,7 +7,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
 export const DEFAULT_OPENAI_MODEL = "gpt-6-luna";
 
-export async function createConfiguredModel(env = process.env, { fetch: fetchImplementation } = {}) {
+export async function createConfiguredModel(env = globalThis.process?.env ?? {}, { fetch: fetchImplementation, browser = false } = {}) {
     const provider = env.AGENT_PROVIDER?.trim().toLowerCase() || "openai";
     const keys = {
         openai: "OPENAI_API_KEY",
@@ -21,12 +22,13 @@ export async function createConfiguredModel(env = process.env, { fetch: fetchImp
     const modelId = env.AGENT_MODEL?.trim() || (provider === "openai" ? DEFAULT_OPENAI_MODEL : "");
     if (!modelId) throw new Error(`Set AGENT_MODEL for ${provider}; use a tool-capable model ID from that provider.`);
     const apiKey = env[keys[provider]]?.trim();
-    if (!apiKey) throw new Error(`Set ${keys[provider]} in .env.local for ${provider}.`);
+    if (!apiKey) throw new Error(browser ? `Add your ${provider} API key in Settings before starting a task.` : `Set ${keys[provider]} in .env.local for ${provider}.`);
 
     if (provider === "openai" || provider === "meta") {
         // Each native Responses endpoint uses only its matching provider key.
         const baseURL = provider === "meta" ? "https://api.meta.ai/v1" : "https://api.openai.com/v1";
-        const client = new OpenAIProvider({ apiKey, baseURL, useResponses: true });
+        const client = new OpenAIProvider({ useResponses: true,
+            ...(browser ? { openAIClient: new OpenAI({ apiKey, baseURL, dangerouslyAllowBrowser: true, ...(fetchImplementation ? { fetch: fetchImplementation } : {}) }) } : { apiKey, baseURL }) });
         return { provider, modelId, model: await client.getModel(modelId),
             modelSettings: { maxTokens: 2000, store: false }, close: () => client.close() };
     }
@@ -34,7 +36,7 @@ export async function createConfiguredModel(env = process.env, { fetch: fetchImp
     const options = { apiKey, fetch: fetchImplementation };
     let languageModel;
     if (provider === "gemini") languageModel = createGoogleGenerativeAI(options)(modelId);
-    if (provider === "claude") languageModel = createAnthropic(options)(modelId);
+    if (provider === "claude") languageModel = createAnthropic({ ...options, ...(browser ? { headers: { "anthropic-dangerous-direct-browser-access": "true" } } : {}) })(modelId);
     if (provider === "openai-compatible") {
         let baseURL;
         try { baseURL = new URL(env.COMPATIBLE_BASE_URL); }
@@ -50,7 +52,7 @@ export async function createConfiguredModel(env = process.env, { fetch: fetchImp
     return { provider, modelId, model: aisdk(languageModel), modelSettings: { maxTokens: 2000 }, close: async () => {} };
 }
 
-export function formatAgentError(error, env = process.env) {
+export function formatAgentError(error, env = globalThis.process?.env ?? {}) {
     let message = String(error.message ?? "Agent request failed.");
     // Provider errors may echo credentials or authenticated request URLs.
     for (const [name, value] of Object.entries(env)) {

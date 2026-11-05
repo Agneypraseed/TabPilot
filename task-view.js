@@ -79,7 +79,7 @@ class TabPilotTaskView {
         const relevant = all.filter(job => roots.some(root => root.id === job.id || root.id === job.parentTaskId));
         const working = relevant.filter(job => ["running", "continuing", "waiting-for-worker"].includes(job.status)).length;
         const waiting = relevant.filter(job => job.status === "needs-input").length;
-        this.$("tasks-summary").textContent = state?.schedulerWarning || state?.notificationWarning || (!connected ? "Connect the local bridge to manage tasks." : !state?.jobs ? "Restart the bridge to enable Tasks." : relevant.length ? `${working} working · ${waiting} need help` : "No tasks for this tab yet.");
+        this.$("tasks-summary").textContent = state?.schedulerWarning || state?.notificationWarning || (!connected ? (state?.executionMode === "extension" ? "Open Settings to start the extension agent." : "Connect the local bridge to manage tasks.") : !state?.jobs ? "Restart the bridge to enable Tasks." : relevant.length ? `${working} working · ${waiting} need help` : "No tasks for this tab yet.");
         this.$("tasks-list").replaceChildren();
         for (const root of roots.slice(0, 50)) {
             this.$("tasks-list").append(this.row(root));

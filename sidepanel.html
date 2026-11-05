@@ -222,7 +222,7 @@
             <button id="schedule-submit" class="primary full-width">Schedule task</button>
           </form>
         </details>
-        <p class="help tasks-footnote">Keep Chrome and the local bridge running. Interrupted tasks need review before resuming.</p>
+        <p class="help tasks-footnote">Keep Chrome running. Interrupted tasks need review before resuming. Developer server mode also needs its local server.</p>
       </section>
       <footer id="composer-area" class="composer-area">
         <div id="run-controls" hidden>
@@ -246,7 +246,7 @@
           class="model-label"
           title="Change model in Settings"
         >
-          Connect your local bridge <span>⌄</span>
+          Choose your model <span>⌄</span>
         </button>
         <p id="composer-hint">Web tabs have access by default. Manage access in Settings.</p>
       </footer>
@@ -264,29 +264,9 @@
         </p>
       </section>
       <section class="settings-section">
-        <h3>Connection</h3>
-        <p id="settings-connection" class="connection-description">
-          Start your local bridge to connect.
-        </p>
-        <form id="pair-form">
-          <label for="pair-token">Local pairing token</label>
-          <div class="input-row">
-            <input
-              id="pair-token"
-              type="password"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="Paste your pairing token"
-              maxlength="64"
-            /><button id="connect" class="primary">Connect</button>
-          </div>
-        </form>
-        <p class="help">
-          Get your token with <code>npm run cli -- pair</code>.
-        </p>
-        <button id="disconnect" class="text-button" hidden>
-          Disconnect bridge
-        </button>
+        <h3>Runs in your browser</h3>
+        <p class="help">TabPilot runs the agent inside this extension by default. Add your own model API key below, choose a tab, and start a task. No terminal, pairing token, or local server is required.</p>
+        <p class="help">Keep Chrome running for scheduled tasks. Closing the workspace does not stop a task. Browser exit or extension reload interrupts active work; review it before resuming. Missed schedules are checked when the extension next runs. After a browser restart, review saved tasks and choose their current tabs before resuming.</p>
       </section>
       <section class="settings-section">
         <h3>Tab access</h3>
@@ -330,15 +310,46 @@
             <option value="openai-compatible">OpenAI compatible</option></select
           ><label for="model">Model</label
           ><input id="model" required maxlength="150" placeholder="Model ID" />
-          <p id="provider-help" class="help">
-            API keys stay on your local bridge.
-          </p>
+          <div id="extension-credentials">
+            <label for="provider-key">Provider API key</label>
+            <input id="provider-key" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Enter your API key" />
+            <label class="check-label"><input id="clear-provider-key" type="checkbox" /> Remove saved key for this provider</label>
+            <div id="compatible-endpoint" hidden>
+              <label for="compatible-base-url">Compatible API base URL</label>
+              <input id="compatible-base-url" type="url" autocomplete="off" spellcheck="false" maxlength="1000" placeholder="https://your-provider.example/v1" />
+            </div>
+          </div>
+          <p id="provider-help" class="help">Enter your own key. Keys are never shown again or shared with a web page.</p>
         </section>
-        <section class="settings-section">
-          <h3>Local downloads</h3>
-          <label for="download-directory">Download folder</label>
-          <input id="download-directory" maxlength="1000" placeholder="Absolute folder path" />
-          <p class="help">Used only when you explicitly choose a local-bridge download for a public page link. No browser cookies are forwarded. Chrome downloads still use Chrome’s normal destination.</p>
+        <section id="notification-settings" class="settings-section">
+          <h3>Telegram and email alerts</h3>
+          <p class="help">Optional alerts go to your configured recipients when a task needs input or completes. Messages include task summaries or questions and leave your device. Reply and approve actions in TabPilot.</p>
+          <details class="credential-group">
+            <summary>Telegram</summary>
+            <label for="telegram-token">Bot token</label>
+            <input id="telegram-token" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Token from @BotFather" />
+            <label for="telegram-chat">Chat ID</label>
+            <input id="telegram-chat" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="Numeric chat ID" />
+            <p id="telegram-status" class="help">Not configured.</p>
+            <label class="check-label"><input id="clear-telegram" type="checkbox" /> Remove Telegram settings</label>
+          </details>
+          <details class="credential-group">
+            <summary>Email through Resend</summary>
+            <label for="resend-key">Resend API key</label>
+            <input id="resend-key" type="password" autocomplete="off" spellcheck="false" maxlength="4096" />
+            <label for="email-from">Sender address</label>
+            <input id="email-from" type="text" autocomplete="off" spellcheck="false" maxlength="500" placeholder="TabPilot &lt;alerts@your-domain.example&gt;" />
+            <label for="email-to">Recipient address</label>
+            <input id="email-to" type="email" autocomplete="off" spellcheck="false" maxlength="500" />
+            <p id="email-status" class="help">Not configured.</p>
+            <label class="check-label"><input id="clear-email" type="checkbox" /> Remove email settings</label>
+          </details>
+        </section>
+        <section id="credential-storage" class="settings-section">
+          <h3>Credential storage</h3>
+          <label class="check-label"><input id="remember-credentials" type="checkbox" /> Remember credentials on this device</label>
+          <p class="help">By default, credentials last for this browser session. Remembering saves them in this extension’s local storage, never Chrome sync. Local storage is not an encrypted vault. Keys are sent only to their selected API provider; page text and screenshots used by the agent go to that provider.</p>
+          <p class="help">Leave credential fields blank to keep existing values. Use the removal options to clear them. Settings never display stored keys, tokens, or recipient addresses. Developer server mode uses its own .env.local instead.</p>
         </section>
         <details class="settings-section advanced-settings">
           <summary>Advanced settings</summary>
@@ -374,6 +385,31 @@
           Changes apply to the next run. CLI model settings remain independent.
         </p>
       </form>
+      <details id="developer-settings" class="settings-section advanced-settings">
+        <summary>Developer settings</summary>
+        <p class="help">Use the optional local server for external CLI or MCP clients and downloads to an absolute local folder. Normal browser tasks run in the extension and need no server. The two modes keep separate model settings, credentials, tasks, and history; switching does not copy credentials.</p>
+        <label for="execution-mode">Agent execution</label>
+        <select id="execution-mode">
+          <option value="extension">In this extension (default)</option>
+          <option value="bridge">Local developer server</option>
+        </select>
+        <button id="apply-execution-mode" class="secondary" type="button">Apply execution mode</button>
+        <p id="settings-connection" class="connection-description">The agent runs in this extension.</p>
+        <div id="developer-bridge" hidden>
+          <p class="help">Run <code>npm start</code> in the project folder. In another terminal, run <code>npm run cli -- pair</code> and paste the token below. Only the server must stay running. Restarting it creates a new token.</p>
+          <form id="pair-form">
+            <label for="pair-token">Local pairing token</label>
+            <div class="input-row">
+              <input id="pair-token" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your pairing token" maxlength="64" />
+              <button id="connect" class="primary">Connect</button>
+            </div>
+          </form>
+          <button id="disconnect" class="text-button" hidden>Disconnect bridge</button>
+          <label for="download-directory">Local download folder</label>
+          <input id="download-directory" maxlength="1000" placeholder="Absolute folder path" form="settings-form" />
+          <p class="help">Used only for an explicitly requested local-server download of a public link, without browser cookies. Chrome’s normal downloads remain available in extension mode. Save settings after changing this folder.</p>
+        </div>
+      </details>
     </section>
     <dialog id="image-dialog">
       <button id="close-image" class="secondary">Close</button

@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+const randomUUID = () => globalThis.crypto.randomUUID();
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import { AgentService } from "./agent-service.mjs";
-import { taskInputSchema } from "./task-store.mjs";
+import { taskInputSchema } from "./task-schema.mjs";
 import { checkpointHistory } from "./task-checkpoint.mjs";
 
 const terminal = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -40,7 +40,7 @@ export class TaskManager {
             };
         }
         this.ready = this.load();
-        if (autoTick) { this.timer = setInterval(() => void this.tick().catch(error => { this.schedulerWarning = error.message; }), 1000); this.timer.unref(); }
+        if (autoTick) { this.timer = setInterval(() => void this.tick().catch(error => { this.schedulerWarning = error.message; }), 1000); this.timer.unref?.(); }
     }
     async load() {
         for (const record of await this.store.load()) this.records.set(record.id, record);

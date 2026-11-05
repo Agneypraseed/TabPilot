@@ -1,26 +1,31 @@
-import { randomUUID } from "node:crypto";
+const randomUUID = () => globalThis.crypto.randomUUID();
 import { z } from "zod";
-import { runBrowserAgent } from "./agent.mjs";
+import { runBrowserAgent } from "./agent-runner.mjs";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
-import { historyQuery } from "./trace-history.mjs";
+import { historyQuery } from "./history-schema.mjs";
 import { HumanRequests, ActiveRunBudget } from "./human-requests.mjs";
-import { isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
+const isAbsolute = value => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(value);
+const defaultDownloadDirectory = () => {
+    if (!globalThis.process?.versions?.node) return "/Downloads";
+    const url = new URL("./.tabpilot/downloads/", import.meta.url);
+    return url.protocol === "file:" ? decodeURIComponent(url.pathname).replace(/^\/([A-Za-z]:)/, "$1") : "/Downloads";
+};
 
 const providers = { openai: "OPENAI_API_KEY", meta: "META_API_KEY", gemini: "GOOGLE_GENERATIVE_AI_API_KEY", claude: "ANTHROPIC_API_KEY", "openai-compatible": "COMPATIBLE_API_KEY" };
 const settingsSchema = z.object({
     provider: z.enum(Object.keys(providers)), model: z.string().trim().min(1).max(150),
     maxTurns: z.number().int().min(1).max(100), timeoutMs: z.number().int().min(1000).max(900000),
     approvalMode: z.enum(["important", "every-action"]).default("important"), soundAlerts: z.boolean().default(true),
-    downloadDirectory: z.string().trim().min(1).max(1000).refine(value => isAbsolute(value) && !/[\u0000-\u001f\u007f-\u009f]/.test(value), "Choose an absolute local download folder.").default(fileURLToPath(new URL("./.tabpilot/downloads/", import.meta.url)))
+    downloadDirectory: z.string().trim().min(1).max(1000).refine(value => isAbsolute(value) && !/[\u0000-\u001f\u007f-\u009f]/.test(value), "Choose an absolute local download folder.").default(defaultDownloadDirectory())
 }).strict();
 const startSchema = z.object({ prompt: z.string().trim().min(1).max(12000),
     tabId: z.number().int().nonnegative(), mode: z.enum(["browser", "computer"]), scope: z.string().uuid().optional(), tabTitle: z.string().max(500).optional() }).strict();
 
 export class AgentService {
-    constructor({ env = process.env, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel, traceStore,
-        sessionId, manageTraceStore = true, runnerOptions = {}, onCheckpoint = async () => {} } = {}) {
+    constructor({ env = globalThis.process?.env ?? {}, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel, traceStore,
+        sessionId, manageTraceStore = true, runnerOptions = {}, onCheckpoint = async () => {}, allowUnconfiguredSettings = false } = {}) {
         this.env = { ...env };
+        this.allowUnconfiguredSettings = allowUnconfiguredSettings;
         this.settings = settingsSchema.parse(settings ?? {
             provider: env.AGENT_PROVIDER || "openai", model: env.AGENT_MODEL || DEFAULT_OPENAI_MODEL,
             maxTurns: Number(env.AGENT_MAX_TURNS || 30), timeoutMs: Number(env.AGENT_TIMEOUT_MS || 300000)
@@ -115,7 +120,7 @@ export class AgentService {
         if (method === "settings") {
             if (this.active) throw new Error("Stop the current run before changing model settings.");
             const next = settingsSchema.parse(payload);
-            if (!this.env[providers[next.provider]]?.trim()) throw new Error(`Add ${providers[next.provider]} to .env.local and restart the bridge.`);
+            if (!this.allowUnconfiguredSettings && !this.env[providers[next.provider]]?.trim()) throw new Error(`Configure ${providers[next.provider]} in Settings before selecting this provider.`);
             await this.saveSettings(next);
             this.settings = next;
             this.history = [];

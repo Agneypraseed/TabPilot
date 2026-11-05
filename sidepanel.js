@@ -18,6 +18,9 @@
     selected = null;
   // Retain the existing wire value for saved tasks and older bridges.
   const mode = "browser";
+  let executionMode = "extension";
+  let executionModeDirty = false;
+  let runtimeSettings = { configuredFields: [] };
   let settingsDirty = false,
     accessBusy = false,
     busy = false,
@@ -169,6 +172,8 @@
     claude: "Claude",
     "openai-compatible": "OpenAI compatible",
   };
+  const providerKeys = { openai: "OPENAI_API_KEY", meta: "META_API_KEY", gemini: "GOOGLE_GENERATIVE_AI_API_KEY", claude: "ANTHROPIC_API_KEY", "openai-compatible": "COMPATIBLE_API_KEY" };
+  const credentialInputs = { "telegram-token": "TELEGRAM_BOT_TOKEN", "telegram-chat": "TABPILOT_TELEGRAM_CHAT_ID", "resend-key": "RESEND_API_KEY", "email-from": "TABPILOT_EMAIL_FROM", "email-to": "TABPILOT_EMAIL_TO" };
   const defaults = { openai: "gpt-6-luna", meta: "muse-spark-1.3" };
 
   function notice(text, success = false) {
@@ -205,6 +210,7 @@
     document.body.classList.toggle("settings-open", show);
     if (show) {
       fillSettings();
+      void refreshRuntimeSettings().catch(error => notice(error.message));
       $("settings-view").scrollTop = 0;
     }
   }
@@ -336,10 +342,10 @@
     $("history-tab-label").textContent = selected?.title || "Choose a tab";
     if (!connected || !selected || !agent?.historyAvailable) {
       $("history-status").textContent = !connected
-        ? "Connect the local bridge to view History."
+        ? executionMode === "bridge" ? "Connect the developer server to view its History." : "Starting extension History…"
         : !selected
           ? "Choose a browser tab."
-          : "Restart the bridge to enable History.";
+          : "History is not available from this runtime.";
       return;
     }
     if (historyBusy) {
@@ -415,13 +421,50 @@
     $("timeout").value = String(s.timeoutMs);
     providerHelp();
   }
+  function acceptRuntime(value) {
+    if (!value) return;
+    runtimeSettings = { ...runtimeSettings, ...value };
+    if (["extension", "bridge"].includes(value.executionMode)) executionMode = value.executionMode;
+    if (!executionModeDirty) $("execution-mode").value = executionMode;
+    if (!settingsDirty) {
+      $("remember-credentials").checked = runtimeSettings.rememberCredentials === true;
+      $("compatible-base-url").value = runtimeSettings.compatibleBaseUrl || "";
+    }
+    renderRuntimeSettings();
+  }
+  async function refreshRuntimeSettings() {
+    const result = await command("runtime-settings");
+    acceptRuntime(result.runtime || result.state?.runtime);
+  }
+  function renderRuntimeSettings() {
+    const local = executionMode === "extension";
+    $("extension-credentials").hidden = !local;
+    $("notification-settings").hidden = !local;
+    $("credential-storage").hidden = !local;
+    $("developer-bridge").hidden = local;
+    $("apply-execution-mode").disabled = active();
+    const fields = runtimeSettings.configuredFields || [];
+    $("telegram-status").textContent = ["TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID"].every(name => fields.includes(name))
+      ? "Telegram settings saved. The bot must have received /start from this chat."
+      : "Add a bot token and chat ID. Send /start to your bot first.";
+    $("email-status").textContent = ["RESEND_API_KEY", "TABPILOT_EMAIL_FROM", "TABPILOT_EMAIL_TO"].every(name => fields.includes(name))
+      ? "Email settings saved. Your sender must be allowed by Resend."
+      : "Add a Resend key, sender and recipient. Test senders can only email your Resend account address.";
+    providerHelp();
+  }
   function providerHelp() {
-    const configured = agent?.providers?.find(
-      (p) => p.id === $("provider").value,
-    )?.configured;
-    $("provider-help").textContent = configured
-      ? "API keys stay on your local bridge."
-      : "Add this provider’s API key to .env.local and restart the bridge.";
+    const provider = $("provider").value;
+    const configured = (runtimeSettings.configuredFields || []).includes(providerKeys[provider]) || agent?.providers?.find(p => p.id === provider)?.configured;
+    $("compatible-endpoint").hidden = provider !== "openai-compatible";
+    $("provider-key").placeholder = configured ? "Key saved · leave blank to keep it" : "Enter your API key";
+    $("provider-help").textContent = executionMode === "bridge"
+      ? configured ? "This provider’s key is configured on the developer server." : "Add this provider’s key to the server’s .env.local and restart that server."
+      : configured ? "This provider has a key configured. Leave the key field blank to keep it, or enter a replacement." : "Enter your own provider API key above, then save settings. No local server is needed.";
+  }
+  function clearCredentialInputs() {
+    $("provider-key").value = "";
+    for (const id of Object.keys(credentialInputs)) $(id).value = "";
+    for (const id of ["clear-provider-key", "clear-telegram", "clear-email"]) $(id).checked = false;
   }
   async function resolveContextWindow() {
     return contextWindowPromise ??= (async () => {
@@ -501,13 +544,14 @@
   function renderControls() {
     $("connection").classList.toggle("connected", connected);
     $("connection-label").textContent = connected
-      ? "Connected"
-      : "Disconnected";
-    $("settings-connection").textContent = connected
-      ? "Connected to your local bridge."
-      : "Start your local bridge with npm start.";
-    $("disconnect").hidden = !connected;
-    $("pair-form").hidden = connected;
+      ? executionMode === "extension" ? "In browser" : "Server connected"
+      : executionMode === "extension" ? "Starting…" : "Server offline";
+    $("settings-connection").textContent = executionMode === "extension"
+      ? "The agent runs in this extension. No server connection is needed."
+      : connected ? "Connected to your local developer server." : "Start your local server with npm start, then pair it below.";
+    $("disconnect").hidden = executionMode !== "bridge" || !connected;
+    $("pair-form").hidden = executionMode !== "bridge" || connected;
+    renderRuntimeSettings();
     $("target-tab").disabled = (active() && !agent?.jobs) || !tabs.length;
     $("target-domain").textContent = selected
       ? host(selected.url)
@@ -552,9 +596,11 @@
       ? "Guide your agent…"
       : "What should I do next?";
     $("composer-hint").textContent = !connected
-      ? "Connect the local bridge in Settings to start."
+      ? executionMode === "bridge" ? "Connect the developer server in Settings to start." : "Starting the extension agent…"
       : !agent
-        ? "Restart the bridge to enable the agent interface."
+        ? "Open Settings to configure the agent."
+        : !agent.providers?.find(provider => provider.id === agent.settings?.provider)?.configured
+          ? "Add your provider API key in Settings to start."
         : !selected?.enabled
           ? "Enable access on this tab to start."
           : agent?.status === "needs-input"
@@ -568,7 +614,7 @@
         `${providerLabels[agent.settings.provider]} · ${agent.settings.model}`,
         Object.assign(document.createElement("span"), { textContent: "⌄" }),
       );
-    } else $("model-label").textContent = "Connect your local bridge ⌄";
+    } else $("model-label").textContent = executionMode === "bridge" ? "Connect developer server ⌄" : "Choose your model ⌄";
     taskView?.render(agent, connected);
   }
   let tabAccessSignature = "";
@@ -670,6 +716,8 @@
     )
       return;
     agent = state;
+    if (state.executionMode) executionMode = state.executionMode;
+    acceptRuntime(state.runtime);
     fillSettings();
     renderControls();
     renderMessages();
@@ -682,6 +730,9 @@
   async function sync() {
     const state = await request("tabpilot:ui-state");
     connected = Boolean(state.connected);
+    if(state.error) notice(state.error);
+    if (state.executionMode) executionMode = state.executionMode;
+    acceptRuntime(state.runtime);
     if (state.agent) receive(state.agent);
     else {
       agent = null;
@@ -807,17 +858,63 @@
       notice(error.message);
     }
   });
+  $("execution-mode").addEventListener("change", () => { executionModeDirty = true; });
+  $("apply-execution-mode").addEventListener("click", async () => {
+    $("apply-execution-mode").disabled = true;
+    try {
+      const next = $("execution-mode").value;
+      const result = await command("runtime-configure", { executionMode: next });
+      executionMode = next;
+      executionModeDirty = false;
+      settingsDirty = false;
+      clearCredentialInputs();
+      acceptRuntime(result.runtime || result.state?.runtime || { executionMode: next });
+      await sync();
+      await refreshRuntimeSettings();
+      notice(next === "extension" ? "The agent now runs in this extension." : "Developer server mode selected. Start and pair your local server below.", true);
+    } catch (error) { notice(error.message); }
+    finally { renderControls(); }
+  });
   $("settings-form").addEventListener("input", () => {
     settingsDirty = true;
   });
+  $("download-directory").addEventListener("input", () => { settingsDirty = true; });
   $("provider").addEventListener("change", () => {
     settingsDirty = true;
     $("model").value = defaults[$("provider").value] || "";
+    $("provider-key").value = "";
+    $("clear-provider-key").checked = false;
     providerHelp();
   });
   $("settings-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      if (executionMode === "extension") {
+        const credentials = {};
+        const key = $("provider-key").value.trim();
+        if (key) credentials[providerKeys[$("provider").value]] = key;
+        for (const [id, name] of Object.entries(credentialInputs)) {
+          const value = $(id).value.trim();
+          if (value) credentials[name] = value;
+        }
+        if ($("provider").value === "openai-compatible") {
+          const address = $("compatible-base-url").value.trim();
+          if (!address) throw new Error("Enter the compatible provider’s HTTPS API base URL.");
+          const endpoint = new URL(address);
+          if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash)
+            throw new Error("Use an HTTPS API base URL without credentials, a query, or a fragment. Local HTTP providers need developer server mode.");
+          const granted = await chrome.permissions.request({ origins: [endpoint.origin + "/*"] });
+          if (!granted) throw new Error("Allow access to this provider’s API host before saving it.");
+          credentials.COMPATIBLE_BASE_URL = address;
+        }
+        const clearCredentials = [];
+        if ($("clear-provider-key").checked) clearCredentials.push(providerKeys[$("provider").value]);
+        if ($("clear-telegram").checked) clearCredentials.push("TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID");
+        if ($("clear-email").checked) clearCredentials.push("RESEND_API_KEY", "TABPILOT_EMAIL_FROM", "TABPILOT_EMAIL_TO");
+        const result = await command("runtime-configure", { credentials, clearCredentials, rememberCredentials: $("remember-credentials").checked });
+        clearCredentialInputs();
+        acceptRuntime(result.runtime || result.state?.runtime);
+      }
       await command("settings", {
         provider: $("provider").value,
         model: $("model").value.trim(),
@@ -825,7 +922,7 @@
         timeoutMs: Number($("timeout").value),
         approvalMode: $("approval-mode").value,
         soundAlerts: $("sound-alerts").checked,
-        ...($("download-directory").value.trim() ? { downloadDirectory: $("download-directory").value.trim() } : {}),
+        ...(executionMode === "bridge" && $("download-directory").value.trim() ? { downloadDirectory: $("download-directory").value.trim() } : {}),
       });
       settingsDirty = false;
       fillSettings();
@@ -967,7 +1064,7 @@
   chrome.storage.onChanged.addListener((_changes, area) => {
     if (area === "session" || (area === "local" && _changes.tabAccessRevocations)) refreshTabs().catch(() => {});
   });
-  // Recover state if the panel was closed/reopened; the run lives in Node.
+  // Recover state when reopening the workspace; the selected runtime owns the run.
   const poll = setInterval(
     () =>
       sync().catch(() => {

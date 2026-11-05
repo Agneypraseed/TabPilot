@@ -38,7 +38,7 @@ test("Tasks keeps workers with their parent tab, safely renders prompts, and sub
     assert.equal(payload.allowResearch, false);
     assert.equal($("schedule-prompt").value, "");
 });
-async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "", formatted = false } = {}) {
+async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "", formatted = false, executionMode = "extension", configuredFields = [] } = {}) {
     const window = formatted ? new JSDOM(html).window : parseHTML(html).window;
     const document = window.document;
     // linkedom implements selected options but not HTMLSelectElement.value's setter.
@@ -47,19 +47,29 @@ async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [],
         set(value) { for (const option of this.querySelectorAll("option")) option.toggleAttribute("selected", option.value === String(value)); }
     });
     let runtimeListener;
+    const runtime = { executionMode, configuredFields: [...configuredFields], rememberCredentials: false, compatibleBaseUrl: "" };
     const activationListeners = [];
     const stored = {}, calls = [], queries = [];
     const agent = { revision: 1, status: "idle", runId: "run-1", events: [], historyAvailable: true, historyRevision: 0, settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
     const event = { addListener() {} };
     const chrome = {
+        permissions: { request: async options => { calls.push({ permissionRequest: options }); return true; } },
         tabs: { query: async query => { queries.push(query); const available = [{ id: 12, windowId: 7, incognito, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 8, title: "Other tab", url: "https://other.example/" }, ...extraTabs]; return query.active ? available.filter(tab => tab.id === initialActiveTab && (!query.windowId || tab.windowId === query.windowId)) : available; }, create: async args => calls.push({ createdTab: args }), onActivated: { addListener(fn) { activationListeners.push(fn); } }, onUpdated: event, onRemoved: event },
         windows: { getCurrent: async () => ({ id: 7, incognito }), get: async id => ({ id, incognito }) },
         storage: { session: { get: async () => stored }, onChanged: event },
         runtime: { getURL: path => `chrome-extension://test/${path}`, onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
             calls.push(message);
-            if (message.type === "tabpilot:ui-state") return { connected: true, agent };
+            if (message.type === "tabpilot:ui-state") return { connected: runtime.executionMode === "extension" || executionMode === "bridge", executionMode: runtime.executionMode, runtime, agent: runtime.executionMode === "extension" || executionMode === "bridge" ? agent : null };
             if (message.type === "tabpilot:access") { if (message.enabled) delete stored[`tab:${message.tabId}`]; else stored[`tab:${message.tabId}`] = false; return { ok: true, enabled: message.enabled }; }
             if (message.type === "tabpilot:agent") {
+                if (message.method === "runtime-settings") return { ok: true, runtime };
+                if (message.method === "runtime-configure") {
+                    Object.assign(runtime, { executionMode: message.payload.executionMode || runtime.executionMode });
+                    for (const name of Object.keys(message.payload.credentials || {})) if (!runtime.configuredFields.includes(name)) runtime.configuredFields.push(name);
+                    runtime.configuredFields = runtime.configuredFields.filter(name => !(message.payload.clearCredentials || []).includes(name));
+                    if (typeof message.payload.rememberCredentials === "boolean") runtime.rememberCredentials = message.payload.rememberCredentials;
+                    return { ok: true, runtime };
+                }
                 if (message.method === "history-list") return { ok: true, history: { runs: message.payload.tabId === 12 ? [{ runId: "history-1", task: "Find <img src=x>", source: "workspace", model: "fixture", status: "completed", startedAt: 1 }] : [], nextOffset: null } };
                 if (message.method === "history-events") return { ok: true, history: { events: [{ kind: "assistant", text: "Found the page", time: 1 }, { kind: "tool", tool: "click", phase: "complete", time: 1, result: { clicked: true } }], nextOffset: null } };
                 if (message.method === "start") Object.assign(agent, { status: "running", tabId: 12, mode: message.payload.mode, revision: 2, events: [{ id: "message-1", kind: "user", text: message.payload.prompt }] });
@@ -285,4 +295,93 @@ test("opening an incognito workspace preserves its window context in both layout
     ui.chrome.windows.create = async () => { throw new Error("Unsupported"); };
     await ui.dispatch("open-window");
     assert.equal(ui.calls.find(call => call.createdTab).createdTab.windowId, 7);
+});
+
+
+test("extension defaults expose local credential entry and keep server pairing in closed Developer settings", async () => {
+    const ui = await panel({ configuredFields: ["META_API_KEY", "TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID"] });
+    const $ = id => ui.document.getElementById(id);
+    await ui.dispatch("settings-button");
+    assert.equal($("connection-label").textContent, "In browser");
+    assert.equal($("developer-settings").hasAttribute("open"), false);
+    assert.equal($("pair-form").closest("details").id, "developer-settings");
+    assert.equal($("developer-bridge").hidden, true);
+    assert.equal($("extension-credentials").hidden, false);
+    assert.equal($("provider-key").value, "");
+    assert.match($("provider-key").placeholder, /Key saved/);
+    assert.match($("telegram-status").textContent, /settings saved/);
+    assert.equal($("telegram-token").value, "");
+    assert.equal($("telegram-chat").value, "");
+    assert.match($("settings-view").textContent, /No terminal, pairing token, or local server is required/);
+});
+
+test("credential save precedes model settings, preserves blank entries and clears the form", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    await ui.dispatch("settings-button");
+    $("provider-key").value = "new-provider-fixture";
+    $("telegram-token").value = "bot-fixture";
+    $("telegram-chat").value = "1234";
+    $("clear-email").checked = true;
+    $("remember-credentials").checked = true;
+    await ui.dispatch("settings-form", "input");
+    await ui.dispatch("settings-form", "submit");
+    const configuration = ui.calls.find(call => call.method === "runtime-configure");
+    assert.deepEqual(JSON.parse(JSON.stringify(configuration.payload)), {
+        credentials: { META_API_KEY: "new-provider-fixture", TELEGRAM_BOT_TOKEN: "bot-fixture", TABPILOT_TELEGRAM_CHAT_ID: "1234" },
+        clearCredentials: ["RESEND_API_KEY", "TABPILOT_EMAIL_FROM", "TABPILOT_EMAIL_TO"], rememberCredentials: true
+    });
+    assert.ok(ui.calls.indexOf(configuration) < ui.calls.findIndex(call => call.method === "settings"));
+    assert.equal($("provider-key").value, "");
+    assert.equal($("telegram-token").value, "");
+    assert.equal($("telegram-chat").value, "");
+    assert.equal($("clear-email").checked, false);
+    assert.doesNotMatch($("settings-view").textContent, /new-provider-fixture|bot-fixture/);
+    await ui.dispatch("settings-form", "submit");
+    assert.equal(Object.keys(ui.calls.filter(call => call.method === "runtime-configure").at(-1).payload.credentials).length, 0);
+});
+
+test("switching to developer mode reveals pairing and hides extension credential fields", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    await ui.dispatch("settings-button");
+    $("execution-mode").value = "bridge";
+    await ui.dispatch("execution-mode", "change");
+    await ui.dispatch("apply-execution-mode");
+    assert.equal(ui.calls.find(call => call.method === "runtime-configure").payload.executionMode, "bridge");
+    assert.equal($("developer-bridge").hidden, false);
+    assert.equal($("pair-form").hidden, false);
+    assert.equal($("extension-credentials").hidden, true);
+    assert.equal($("notification-settings").hidden, true);
+    assert.equal($("send").disabled, true);
+    assert.match($("settings-connection").textContent, /Start your local server/);
+});
+
+test("provider changes discard an unsaved key so it cannot be sent to another provider", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    await ui.dispatch("settings-button");
+    $("provider-key").value = "meta-only-fixture";
+    $("provider").value = "openai-compatible";
+    await ui.dispatch("provider", "change");
+    assert.equal($("provider-key").value, "");
+    assert.equal($("compatible-endpoint").hidden, false);
+    $("compatible-base-url").value = "https://provider.example/v1";
+    await ui.dispatch("settings-form", "submit");
+    const saved = ui.calls.find(call => call.method === "runtime-configure").payload.credentials;
+    assert.equal(saved.COMPATIBLE_BASE_URL, "https://provider.example/v1");
+    assert.equal(saved.META_API_KEY, undefined);
+    assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(call => call.permissionRequest).permissionRequest)), { origins: ["https://provider.example/*"] });
+});
+
+
+test("a denied compatible-host permission prevents saving credentials or model settings", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    ui.chrome.permissions.request = async () => false;
+    await ui.dispatch("settings-button");
+    $("provider").value = "openai-compatible";
+    await ui.dispatch("provider", "change");
+    $("model").value = "custom-model";
+    $("compatible-base-url").value = "https://provider.example/v1";
+    $("provider-key").value = "fixture";
+    await ui.dispatch("settings-form", "submit");
+    assert.equal(ui.calls.some(call => call.method === "runtime-configure" || call.method === "settings"), false);
+    assert.match($("notice").textContent, /Allow access/);
 });

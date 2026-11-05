@@ -954,3 +954,10 @@ body.settings-open #new-chat {
     transition: none !important;
   }
 }
+
+/* Keep optional configuration compact while preserving readable touch targets. */
+.credential-group { margin-top: 14px; }
+.credential-group summary, #developer-settings > summary { cursor: pointer; font-weight: 600; }
+#developer-settings > summary { font-size: 14px; }
+#apply-execution-mode { margin-top: 12px; }
+#settings-view input[type="password"], #settings-view input[type="url"] { min-width: 0; }

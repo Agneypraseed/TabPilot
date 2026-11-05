@@ -8,7 +8,9 @@
     "default_title": "Open TabPilot",
     "default_popup": "sidepanel.html?popup=1"
   },
-  "side_panel": { "default_path": "sidepanel.html" },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "permissions": [
     "storage",
     "debugger",
@@ -16,10 +18,22 @@
     "downloads",
     "sidePanel",
     "notifications",
-    "offscreen"
+    "offscreen",
+    "alarms"
   ],
-  "host_permissions": ["http://127.0.0.1/*"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://api.openai.com/*",
+    "https://api.meta.ai/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.telegram.org/*",
+    "https://api.resend.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "optional_host_permissions": [
+    "https://*/*"
+  ]
 }

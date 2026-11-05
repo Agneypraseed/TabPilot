@@ -7,10 +7,103 @@ importScripts("attention-alerts.js");
 const browser = new TabPilotBrowser(chrome, tabPilotPage);
 const downloads = new TabPilotDownloads(chrome, { permitted: tabId => browser.permitted(tabId) });
 const attentionAlerts = new TabPilotAttentionAlerts(chrome);
+void chrome.storage.local?.setAccessLevel?.({accessLevel:"TRUSTED_CONTEXTS"});
+void chrome.storage.session?.setAccessLevel?.({accessLevel:"TRUSTED_CONTEXTS"});
 
 let bridgeSocket = null;
 let bridgeReady = false;
 let agentState = null;
+let executionMode;
+let runtimeDocument;
+let runtimeConfigurationQueue=Promise.resolve();
+async function getExecutionMode() {
+    if(!executionMode) executionMode=(await chrome.storage.local?.get('extensionExecutionMode'))?.extensionExecutionMode==='bridge'?'bridge':'extension';
+    return executionMode;
+}
+function extensionRuntimeSupported() { return !!(chrome.offscreen?.createDocument && chrome.runtime.getContexts); }
+async function ensureRuntimeDocument() {
+    if(!chrome.offscreen?.createDocument||!chrome.runtime.getContexts) throw new Error('This browser does not support the extension agent runtime. Use desktop Chrome 118 or newer, or select the optional local server in Developer settings.');
+    runtimeDocument ??= (async()=>{
+        const contexts=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[chrome.runtime.getURL('attention-audio.html')]});
+        if(!contexts.length) {
+            try {await chrome.offscreen.createDocument({url:'attention-audio.html',reasons:['WORKERS','AUDIO_PLAYBACK'],justification:'Host the browser agent worker and play optional task attention sounds.'});}
+            catch(error){const retry=await chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT'],documentUrls:[chrome.runtime.getURL('attention-audio.html')]});if(!retry.length)throw error;}
+        }
+        for(let attempt=0;attempt<20;attempt++) {
+            try {if((await chrome.runtime.sendMessage({type:'tabpilot:runtime-ping',target:'offscreen-runtime'}))?.ok)return;}
+            catch {}
+            await new Promise(resolve=>setTimeout(resolve,50));
+        }
+        throw new Error('The extension runtime did not start. Reload the extension and reopen TabPilot.');
+    })().finally(()=>{runtimeDocument=null;});
+    await runtimeDocument;
+}
+async function requestExtension(method,payload={}) {
+    await ensureRuntimeDocument();
+    const response=await chrome.runtime.sendMessage({type:'tabpilot:runtime-command',target:'offscreen-runtime',method,payload,
+        context:{scope:await historyScope(),profileId:await browserProfileId(),enabled:(await getExecutionMode())==='extension'}});
+    if(!response?.ok)throw new Error(response?.error??'The extension runtime did not respond.');
+    if(response.state&&(await getExecutionMode())==='extension')publishAgentState(response.state);
+    return response;
+}
+async function browserCommand(method,tabId,params={}) {
+    if(method==='tabs')return listEnabledTabs();
+    if(method==='snapshot')return readTabSnapshot(tabId);
+    if(method==='screenshot')return browser.screenshot(tabId);
+    if(method==='download')return downloads.start(tabId,params);
+    if(method==='download-status')return downloads.status(tabId,params?.downloadId);
+    if(method==='download-cancel')return downloads.cancel(tabId,params?.downloadId);
+    if(method.startsWith('download-local'))throw new Error('Local file downloads require the optional Developer bridge. Use Chrome downloads in extension mode.');
+    return browser.action(tabId,method,params);
+}
+async function runtimeAgent(method,payload={}) {
+    if(method==="runtime-configure") {
+        const operation=runtimeConfigurationQueue.then(()=>configureRuntime(payload));
+        runtimeConfigurationQueue=operation.catch(()=>{});return operation;
+    }
+    await runtimeConfigurationQueue;
+    const mode=await getExecutionMode();
+    if(method==='runtime-settings') {
+        if(!extensionRuntimeSupported()) return {ok:true,runtime:{executionMode:mode,configuredFields:[],rememberCredentials:false,compatibleBaseUrl:''}};
+        const response=await requestExtension(method);
+        response.runtime.executionMode=mode;
+        return {...response,state:mode==='bridge'?agentState:response.state};
+    }
+    return mode==='extension'?requestExtension(method,payload):requestAgent(method,payload);
+}
+async function configureRuntime(payload) {
+    const mode = await getExecutionMode();
+    if (mode === 'bridge' && bridgeReady) await requestAgent('state');
+    const nextMode = payload.executionMode ?? mode;
+    if (!['extension', 'bridge'].includes(nextMode)) throw new Error('Choose extension or local server mode.');
+    if (nextMode !== mode && (agentState?.jobs ?? []).some(job => ['running', 'needs-input', 'paused', 'waiting-for-worker', 'continuing'].includes(job.status))) {
+        throw new Error('Stop active tasks before changing execution mode.');
+    }
+    if(!extensionRuntimeSupported()) {
+        if(nextMode!=='bridge') throw new Error('This browser cannot host the extension agent. Use desktop Chrome 118 or newer, or select the local developer server.');
+        if(Object.keys(payload).some(key=>key!=='executionMode')) throw new Error('Extension credentials are unavailable in this browser. Developer mode uses the server’s .env.local.');
+        await chrome.storage.local.set({extensionExecutionMode:'bridge'});
+        executionMode='bridge';agentState=null;
+        return {ok:true,runtime:{executionMode:'bridge',configuredFields:[]}};
+    }
+    const response = await requestExtension('runtime-configure', payload);
+    if (nextMode !== mode) {
+        if (mode === 'extension') await requestExtension('suspend');
+        await chrome.storage.local.set({ extensionExecutionMode: nextMode });
+        executionMode = nextMode;
+        bridgeSocket?.close();
+        bridgeSocket = null;
+        bridgeReady = false;
+        agentState = null;
+        if (nextMode === 'extension') await requestExtension('activate');
+    }
+    response.runtime.executionMode = nextMode;
+    return { ...response, state: nextMode === 'extension' ? agentState : null };
+}
+chrome.alarms?.onAlarm.addListener(alarm=>{
+    if(alarm.name==='tabpilot-scheduler')void getExecutionMode().then(mode=>mode==='extension'?requestExtension('tick'):null).catch(()=>{});
+});
+void chrome.alarms?.create('tabpilot-scheduler',{periodInMinutes:1});
 const agentRequests = new Map();
 let historyScopePromise;
 let browserProfilePromise;
@@ -57,7 +150,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access", "tabpilot:agent", "tabpilot:ui-state", "tabpilot:disconnect", "tabpilot:test-alert"].includes(message?.type)) return false;
+    if (!["tabpilot:snapshot", "tabpilot:connect", "tabpilot:bridge-status", "tabpilot:access", "tabpilot:agent", "tabpilot:ui-state", "tabpilot:disconnect", "tabpilot:test-alert", "tabpilot:runtime-rpc", "tabpilot:runtime-event"].includes(message?.type)) return false;
 
     // Only our extension pages can request snapshots through this handler.
     const ownExtensionPage = typeof sender.url === "string" && sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
@@ -66,13 +159,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    if (message.type === "tabpilot:bridge-status") {
-        sendResponse({ connected: bridgeReady });
-        return false;
+    if (message.type === 'tabpilot:runtime-rpc' || message.type === 'tabpilot:runtime-event') {
+        if(sender.url!==chrome.runtime.getURL('attention-audio.html')) {sendResponse({ok:false,error:'Only the extension runtime can use this channel.'});return false;}
+        if(message.type==='tabpilot:runtime-event') {
+            void getExecutionMode().then(mode=>{
+                if(mode!=='extension')return;
+                if(message.event==='state')publishAgentState(message.state);
+                if(message.event==='history')void chrome.runtime.sendMessage({type:'tabpilot:history-event',revision:message.revision}).catch(()=>{});
+            });
+            sendResponse({ok:true});return false;
+        }
+        const {operation,payload={}}=message;
+        const execute=async()=>{
+            if(operation==='browser') {
+                if((await getExecutionMode())!=='extension')throw new Error('The extension agent is disabled in local server mode.');
+                return browserCommand(payload.method,payload.tabId,payload.params);
+            }
+            if(!['local','session'].includes(payload.area))throw new Error('Invalid storage area.');
+            const storage=chrome.storage[payload.area];
+            // Runtime messages may only use the dedicated extension data namespace.
+            if(operation==='storage-get'&&payload.key===null) {
+                const all=await storage.get(null);return Object.fromEntries(Object.entries(all).filter(([key])=>key.startsWith('extension')));
+            }
+            const keys=operation==='storage-set'?Object.keys(payload.items??{}):Array.isArray(payload.key)?payload.key:[payload.key];
+            if(!keys.length||keys.some(key=>typeof key!=='string'||!key.startsWith('extension')))throw new Error('Invalid runtime storage key.');
+            if(operation==='storage-get')return storage.get(payload.key);
+            if(operation==='storage-set')return storage.set(payload.items);
+            if(operation==='storage-remove')return storage.remove(payload.key);
+            throw new Error('Unknown runtime request.');
+        };
+        execute().then(data=>sendResponse({ok:true,data}),error=>sendResponse({ok:false,error:operation==='browser'?error.message:'Extension storage operation failed. Check available local storage space.'}));return true;
     }
-    if (message.type === "tabpilot:ui-state") {
-        sendResponse({ connected: bridgeReady, agent: agentState });
-        return false;
+    if (message.type === "tabpilot:bridge-status" || message.type === "tabpilot:ui-state") {
+        getExecutionMode().then(async mode=>{
+            if(mode==='extension') {
+                try {const response=await requestExtension('state');sendResponse({connected:true,agent:response.state,executionMode:mode,runtime:response.state.runtime});}
+                catch(error){sendResponse({connected:false,agent:null,executionMode:mode,error:error.message});}
+            } else sendResponse({connected:bridgeReady,agent:agentState,executionMode:mode,runtime:{executionMode:mode}});
+        });
+        return true;
     }
     if (message.type === "tabpilot:disconnect") {
         bridgeSocket?.close();
@@ -84,7 +209,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : message.type === "tabpilot:access"
         ? browser.setAccess(message.tabId, message.enabled).then(result => ({ ok: true, ...result }))
         : message.type === "tabpilot:agent"
-        ? requestAgent(message.method, message.payload)
+        ? runtimeAgent(message.method, message.payload)
         : message.type === "tabpilot:connect"
         ? connectBridge(message.token).then(() => ({ ok: true }))
         : readTabSnapshot(message.tabId).then((snapshot) => ({ ok: true, snapshot }));
@@ -126,7 +251,8 @@ async function listEnabledTabs() {
         .map(tab => ({ id: tab.id, title: tab.title ?? "", url: tab.url ?? "" }));
 }
 
-function connectBridge(token) {
+async function connectBridge(token) {
+    if((await getExecutionMode())!=="bridge") throw new Error("Select local server mode in Developer settings before pairing.");
     if (bridgeSocket) return Promise.reject(new Error("Bridge is already connecting or connected."));
     if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) {
         return Promise.reject(new Error("Paste the token from npm run cli -- pair."));
@@ -172,14 +298,7 @@ function connectBridge(token) {
             }
             if (!ready || message.type !== "request" || typeof message.id !== "string") return;
             try {
-                let data;
-                if (message.method === "tabs") data = await listEnabledTabs();
-                else if (message.method === "snapshot") data = await readTabSnapshot(message.tabId);
-                else if (message.method === "screenshot") data = await browser.screenshot(message.tabId);
-                else if (message.method === "download") data = await downloads.start(message.tabId, message.params);
-                else if (message.method === "download-status") data = await downloads.status(message.tabId, message.params?.downloadId);
-                else if (message.method === "download-cancel") data = await downloads.cancel(message.tabId, message.params?.downloadId);
-                else data = await browser.action(message.tabId, message.method, message.params);
+                const data = await browserCommand(message.method, message.tabId, message.params);
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: "response", id: message.id, ok: true, data }));
                 }
@@ -206,4 +325,3 @@ function connectBridge(token) {
         };
     });
 }
-

@@ -92,7 +92,9 @@ test("background dispatch routes all download commands through originating-tab a
     }
     const context = vm.createContext({ chrome, URL, WebSocket: Socket, crypto: globalThis.crypto, setTimeout, clearTimeout });
     vm.runInContext(backgroundSource, context);
+    vm.runInContext('executionMode = "bridge"', context);
     const connection = context.connectBridge("a".repeat(64));
+    await new Promise(resolve => setImmediate(resolve));
     await socket.onmessage({ data: JSON.stringify({ type: "ready" }) });
     await connection;
     const request = async (method, tabId, params) => {

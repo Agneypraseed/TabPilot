@@ -9,6 +9,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { parseBrowserCommand } from "./commands.mjs";
 import { TraceHistory } from "./trace-history.mjs";
 import { TaskManager } from "./task-manager.mjs";
+import { runBrowserAgent } from "./agent.mjs";
 import { TaskStore } from "./task-store.mjs";
 import { requestBridge } from "./bridge-client.mjs";
 import { taskCommandSchema } from "./task-commands.mjs";
@@ -280,7 +281,7 @@ async function main() {
     const traceStore = new TraceHistory(fileURLToPath(new URL(".tabpilot/history/", import.meta.url)), { env: process.env, secrets: [token] });
     const notifications = new Notifications({ sanitize: value => traceStore.clean(value) });
     const agentService = new TaskManager({ store: new TaskStore(fileURLToPath(new URL(".tabpilot/tasks.json", import.meta.url)), { sanitize: record => traceStore.clean(record) }),
-        browser: requestBridge, notifications, serviceOptions: { settings, traceStore, saveSettings: async next => {
+        browser: requestBridge, notifications, serviceOptions: { run: runBrowserAgent, settings, traceStore, saveSettings: async next => {
         await writeFile(settingsFile, JSON.stringify(next, null, 2), { mode: 0o600 });
     } } });
     const localDownloads = new LocalDownloads({

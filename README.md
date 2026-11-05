@@ -1,101 +1,83 @@
 # TabPilot
 
-TabPilot is a local-first browser agent for your existing Chrome tabs. Give an AI agent a task, watch its browser work, and stay in control of access and important actions.
+TabPilot is a local-first browser agent for your existing Chrome tabs. Give it a task, watch its browser work, and stay in control of tab access and consequential actions.
 
 ## Project Description
 
-TabPilot lets a tool-capable AI work inside a user's existing Chrome session. A Chrome extension exposes browser tools through an authenticated local Node.js bridge. The included agent runs in a browser workspace; the same tools are available to other clients through a command-line interface and Model Context Protocol (MCP).
+TabPilot lets a tool-capable AI work inside your existing Chrome session. By default, the Chrome extension runs the agent itself and connects directly to your selected model provider. Enter your own API key in Settings, choose a tab, and start a task. No terminal, local server, or pairing token is required for normal use.
 
-The agent can inspect page text and controls, navigate and interact with websites, and use screenshots and pointer actions when a task depends on visual content. It checks browser results as it works, stays scoped to the selected tab, and can ask for approval, missing information, or a handoff to the user. People can pause, resume, or stop a run and revoke a tab's access. Scheduled tasks, research specialists in separate tabs, download tracking, attention alerts, and durable per-tab history support longer workflows.
+The agent reads page text and controls, navigates and interacts with websites, and uses screenshots and pointer actions when visual context helps. It stays scoped to its selected tab and asks for approval, missing information, or a browser handoff when needed. You can pause, resume, stop, or revoke tab access. Research specialists, scheduled tasks, download tracking, attention alerts, and per-tab history support longer workflows.
 
-TabPilot keeps browser execution, pairing, schedules, and history on the local machine. Page content and screenshots go to the selected model only when needed for the requested task. The project supports multiple model providers and uses Meta's Muse Spark (`muse-spark-1.3`) through the Meta Model API. The model interprets requests, chooses browser tools, adapts to observed results, handles follow-up input, and reports verified outcomes. TabPilot connects natural-language intent to observable, user-controlled browser actions.
+An optional developer server exposes the browser to external CLI and Model Context Protocol (MCP) clients and supports downloads to an absolute local folder. Extension and developer server modes keep separate settings and data. Supported providers include OpenAI, Meta, Gemini, Claude, and OpenAI-compatible APIs. Meta's Muse Spark model is `muse-spark-1.3`.
 
-## Highlights
+## Start with the extension
 
-- **One agent flow:** the agent chooses page elements, screenshots, and pointer actions as the task requires.
-- **Human control:** tab-by-tab access revocation, action approvals, requests for help, and pause, resume, and stop controls.
-- **Long-running tasks:** schedules, a coordinator with parallel research specialists, download tracking, and per-tab activity history.
-- **Flexible integrations:** the included agent, CLI, and MCP tools use the same local browser bridge; the agent supports Meta, OpenAI, Gemini, Claude, and compatible APIs.
+Use desktop Chrome 118 or newer. In `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this project folder. The checkout includes the bundled browser runtime; no Node.js process is required to use it.
 
-## Run locally
+1. Open TabPilot from the toolbar, then **Settings**.
+2. Choose a provider and enter its model ID and your own API key. Compatible providers also need their API base URL.
+3. Save settings, choose a web tab, and enter a task.
 
-Requirements: Node.js 22 or newer and Chrome 118 or newer.
+For Meta, choose **Meta** and model `muse-spark-1.3`. Keys for different providers stay separate. Leave credential fields blank to preserve saved values; use the removal controls to delete them. The settings screen never reveals stored keys or recipient addresses.
+
+Credentials last for the browser session by default. **Remember credentials on this device** saves them in extension-local storage, never Chrome sync. That storage is not an encrypted vault. Do not include a shared API key in a distributed extension. Browser execution, tasks, and history stay on your device; page context and screenshots used for inference go to your selected model provider.
+
+Web tabs have access by default. Revoke individual tabs under **Settings → Tab access**. Browser-protected pages and the Chrome Web Store are unavailable. CAPTCHA challenges, logins, and native dialogs can require a user handoff.
+
+Keep Chrome running for schedules. Closing the workspace does not stop a task, but browser exit or extension reload interrupts active work. Review interrupted work before resuming. Scheduled work cannot execute while Chrome is closed; missed schedules are checked when the extension next runs. After a browser restart, review saved tasks and bind them to their current tabs before resuming. Session-only credentials must be entered again.
+
+## Optional developer server, CLI, and MCP
+
+Open **Settings → Developer settings**, select **Local developer server**, and apply the mode. This is for external CLI/MCP integrations or explicit downloads to a local filesystem folder. Normal extension use does not need it.
+
+Install Node.js 22 or newer, then run:
 
 ```powershell
 npm ci
 npm start
 ```
 
-In Chrome, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked** to select this project folder. In another terminal, pair the extension with the local bridge:
+In another terminal:
 
 ```powershell
 npm run cli -- pair
 ```
 
-Click TabPilot's toolbar icon, open **Settings**, paste the pairing token, and connect. The bridge listens on `127.0.0.1:4311`; its pairing file is stored in the ignored `.tabpilot` folder. Restarting the bridge creates a new token. Web tabs are accessible by default; revoke individual tabs in **Settings → Tab access** whenever needed.
+Paste the token into the pairing field under Developer settings and connect. Only the server needs to stay running; the pairing command displays a token and exits. The server listens on `127.0.0.1:4311`. Restarting it generates a new pairing token.
 
-Add a provider key to the ignored `.env.local` file using `.env.example`. To use Meta's Muse Spark model:
-
-```dotenv
-AGENT_PROVIDER=meta
-AGENT_MODEL=muse-spark-1.3
-META_API_KEY=your-key
-```
-
-Then open a web tab and start a task:
-
-```powershell
-npm run agent -- --provider meta --model muse-spark-1.3 "Summarize the page and verify the result"
-```
-
-The provider and model can also be selected in the workspace. API keys stay on the local bridge; page context selected for inference is sent to the chosen provider.
-
-## CLI and MCP
-
-The CLI can list accessible tabs and inspect or control a tab:
+The server reads its own provider credentials from ignored `.env.local`; use `.env.example` for setting names. Extension credentials are not copied to the server. Switching modes keeps their tasks, history, and settings separate. Return to **In this extension (default)** for normal use.
 
 ```powershell
 npm run cli -- tabs
 npm run cli -- snapshot <tab-id>
 npm run cli -- help
+npm run agent -- --provider meta --model muse-spark-1.3 "Summarize this page"
 ```
 
-For an MCP client, launch `mcp.mjs` with Node.js from this checkout. MCP clients use the same authenticated local bridge; no token belongs in client configuration. External clients are responsible for their own approval workflow.
+For an external MCP client, launch `mcp.mjs` with Node.js from this checkout. The MCP process uses the authenticated local bridge; do not put the pairing token in the client's configuration. External clients manage their own approvals.
 
-## Telegram and email notifications
+## Telegram and email alerts
 
-The local bridge can notify you when a task needs permission, information, or a browser handoff, and when a coordinator task finishes with verified evidence. Each pending request sends one alert; research specialists send help alerts but their completions stay with their coordinator. Repeating tasks send a completion alert for each successful occurrence. Notifications run independently of model calls and do not need another model API key.
+Configure either channel under **Settings → Telegram and email alerts** in extension mode. Developer server mode instead reads the following settings from `.env.local`; restart the server after changing that file.
 
-Both channels are optional. Add either or both to the ignored `.env.local`, then restart `npm start`. Leaving a channel's fields empty disables it. Once configured, that channel receives automatic task alerts.
+Telegram needs a bot token from [@BotFather](https://t.me/BotFather) and a numeric chat ID. Send `/start` to your bot first. Obtain the chat ID locally using [getUpdates](https://core.telegram.org/bots/api#getupdates); its URL contains your secret bot token, so keep it out of chat, screenshots, and logs.
 
-**Telegram (free bot messages):** create a bot with [@BotFather](https://t.me/BotFather), save its token locally, and send the bot `/start` from your Telegram account. Obtain your numeric chat ID from the bot's `getUpdates` response using the [Telegram Bot API](https://core.telegram.org/bots/api#getupdates). Do this locally: the API URL contains the bot token, so do not paste it into chat, screenshots, or logs. Use a private chat for personal task alerts.
+Email uses [Resend](https://resend.com), with an API key, allowed sender, and recipient. For testing, `onboarding@resend.dev` can send to your Resend account's own email address. Other recipients need a verified sending domain.
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=
 TABPILOT_TELEGRAM_CHAT_ID=
-```
-
-**Email (Resend free tier):** create a [Resend](https://resend.com) API key and verify your sending domain, then configure the sender and one recipient. Resend's test sender can be used within its account-recipient restrictions. Free-tier limits and domain ownership requirements are set by Resend; no paid plan is required for this integration within those limits.
-
-```dotenv
 RESEND_API_KEY=
-TABPILOT_EMAIL_FROM=TabPilot <agent@your-verified-domain.example>
-TABPILOT_EMAIL_TO=you@example.com
+TABPILOT_EMAIL_FROM=
+TABPILOT_EMAIL_TO=
 ```
 
-The existing MCP server adds two tools:
+Alerts report pending requests and verified coordinator completion; repeating tasks notify for each successful occurrence. They contain task IDs and summaries or help questions. Notifications leave your device for Telegram or Resend. They do not include a screenshot or full task history, and cannot approve actions or resume a task. Respond in TabPilot.
 
-- `notifications_status`: report configured channels and missing setting names without exposing tokens or recipient addresses.
-- `notifications_send`: send an explicitly authorized update to the locally configured recipients. Supply `subject`, `message`, and optionally `channels: ["telegram"]` or `["email"]`; omit `channels` to use both configured channels. For example, ask your MCP client: “Send a test notification saying TabPilot alerts are ready.”
+Provider acceptance does not prove delivery. Sends time out after 10 seconds, do not block the agent, and are never retried automatically because an uncertain send may already have arrived. Failures appear in the Tasks summary without changing the task result. Alerts are best effort and are not replayed after a runtime restart.
 
-Alerts include a task ID and summary or help question. Review permissions and reply in TabPilot; messages cannot approve actions or resume a run. No screenshot, browser history, pairing token, or full task prompt is attached. Keep sensitive information out of summaries and help questions, since notifications leave your machine for the configured providers.
-
-The bridge and browser must stay running for scheduled work. Notification sends time out after 10 seconds and do not block the agent. Failures appear in the Tasks summary and never change a verified task result. Results report provider acceptance, not confirmed delivery. Alerts are best effort: they are not replayed after a bridge restart, and uncertain sends are never retried automatically to avoid duplicates. Check the provider before manually retrying a failed or timed-out send. Network-restricted environments must allow `api.telegram.org` and/or `api.resend.com`.
-
-## Data and limits
-
-TabPilot stores pairing configuration, schedules, and per-tab history locally. Page text and screenshots may be sent to the configured model when an agent uses them. Browser-protected pages and the Chrome Web Store are unavailable. CAPTCHA challenges, login prompts, native dialogs, and browser security warnings may need you to take over. Always review consequential browser actions.
+The developer MCP server also offers `notifications_status` and `notifications_send`. The latter sends explicitly authorized updates only to recipients configured locally; external MCP clients must obtain authorization.
 
 ## Development
 
-Run the automated test suite with `npm test`. The local practice page is available with `npm run practice`.
+Run `npm test` for the automated suite. Run `npm run build:extension` after changing bundled runtime sources; commit the generated browser assets with the source change. The local practice page is available with `npm run practice`.

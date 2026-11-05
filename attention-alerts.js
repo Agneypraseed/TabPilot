@@ -56,9 +56,9 @@ class TabPilotAttentionAlerts {
           if (!contexts.length)
             await api.offscreen.createDocument({
               url: "attention-audio.html",
-              reasons: ["AUDIO_PLAYBACK"],
+              reasons: ["WORKERS", "AUDIO_PLAYBACK"],
               justification:
-                "Play the user's optional local sound when a TabPilot task needs attention.",
+                "Host the browser agent worker and play optional task attention sounds.",
             });
         })().finally(() => {
           this.creatingAudio = null;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { taskInputSchema } from "./task-store.mjs";
+import { taskInputSchema } from "./task-schema.mjs";
 
 const tabId = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const taskCommandSchema = z.discriminatedUnion("method", [

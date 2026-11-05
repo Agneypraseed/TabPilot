@@ -15,15 +15,8 @@ import { formatAgentError } from "./agent-models.mjs";
 
 const uuid = z.string().uuid();
 const tab = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const historyQuery = z
-  .object({
-    tabId: tab,
-    scope: uuid,
-    runId: uuid.optional(),
-    offset: z.number().int().nonnegative().optional(),
-    artifactId: uuid.optional(),
-  })
-  .strict();
+import { historyQuery } from "./history-schema.mjs";
+export { historyQuery } from "./history-schema.mjs";
 
 // Append-only local trace records. Images are separate files so browsing a
 // timeline never loads every screenshot into memory or sends them to a model.

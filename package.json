@@ -11,7 +11,8 @@
     "practice": "node verification/practice-server.mjs",
     "verify:meta": "node verification/live-meta.mjs",
     "test": "node --test test/*.test.mjs",
-    "vendor:markdown": "node scripts/vendor-markdown.mjs"
+    "vendor:markdown": "node scripts/vendor-markdown.mjs",
+    "build:extension": "node scripts/build-extension.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -24,11 +25,13 @@
     "@openai/agents": "0.21.0",
     "@openai/agents-extensions": "0.21.0",
     "ai": "7.0.162",
+    "openai": "7.49.0",
     "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "dompurify": "3.4.17",
+    "esbuild": "0.28.2",
     "jsdom": "30.1.3",
     "linkedom": "0.18.15",
     "marked": "18.1.3"
