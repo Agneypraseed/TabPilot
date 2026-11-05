@@ -587,6 +587,34 @@ h3 {
   padding-left: 28px;
   position: relative;
 }
+.formatted-reply {
+  white-space: normal;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.formatted-reply > :first-child { margin-top: 0; }
+.formatted-reply > :last-child { margin-bottom: 0; }
+.formatted-reply p { margin: 0 0 12px; }
+.formatted-reply h1, .formatted-reply h2, .formatted-reply h3,
+.formatted-reply h4, .formatted-reply h5, .formatted-reply h6 {
+  font-size: 15px; line-height: 1.4; margin: 20px 0 9px; font-weight: 650;
+}
+.formatted-reply h1 { font-size: 18px; }
+.formatted-reply h2 { font-size: 16px; }
+.formatted-reply ul, .formatted-reply ol { margin: 8px 0 14px; padding-left: 22px; }
+.formatted-reply li { margin: 5px 0; }
+.formatted-reply li > p { margin-bottom: 6px; }
+.formatted-reply a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
+.formatted-reply blockquote { margin: 12px 0; border-left: 3px solid var(--line); padding-left: 12px; color: var(--muted); }
+.formatted-reply code { font-family: ui-monospace, monospace; font-size: .9em; background: #f2f4fa; padding: 2px 4px; border-radius: 4px; }
+.formatted-reply pre { max-width: 100%; overflow-x: auto; padding: 12px; background: #f2f4fa; border-radius: 8px; white-space: pre; }
+.formatted-reply pre code { padding: 0; background: transparent; }
+.formatted-reply .reply-table { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+.formatted-reply table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.formatted-reply th, .formatted-reply td { text-align: left; padding: 8px 10px; border: 1px solid var(--line); min-width: 85px; }
+.formatted-reply th { background: #f5f7fc; font-weight: 650; }
+.formatted-reply hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 .message.assistant:before {
   content: "";
   position: absolute;

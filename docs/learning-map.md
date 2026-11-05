@@ -80,6 +80,12 @@ Live workspace acceptance used Meta `muse-spark-1.3` in Computer use mode. The u
 
 Live verification used the user-operated workspace with Meta `muse-spark-1.3` and a read-only practice-page task. A separate disk read confirmed the task, tool request/result, final response, model, and completed status. A real CLI screenshot and real MCP stdio snapshot created separately labeled entries for the same tab; the archived screenshot bytes matched the CLI image exactly. Another tab ID returned no matching runs. Local fixture browser checks validate layout; user-operated extension checks and independent saved-file inspection validate the live path. History records new activity; it cannot reconstruct work performed before recording was added.
 
+## Formatted replies
+
+`markdown.js` renders assistant replies in both the conversation and History. User messages, errors, and tool JSON remain literal text. The locally bundled [Marked parser](https://marked.js.org/) produces Markdown HTML, and [DOMPurify](https://github.com/cure53/DOMPurify) restricts it to formatting tags. Raw HTML is escaped, model-provided images never load, and only absolute HTTP/HTTPS links without embedded credentials become clickable. Links open separately with no opener or referrer. Tables and code blocks scroll inside their containers at popup widths.
+
+Pinned development dependencies supply the committed browser bundles and licenses in `vendor/`; regenerate them with `npm run vendor:markdown` after updating those packages. No CDN or build step is required when loading the unpacked extension. JSDOM tests run the actual bundled parser/sanitizer and verify malicious content, while workspace integration checks live and archived replies. The HTTP-only preview fixture has a `?formatted` view with clearly illustrative results.
+
 ## Human collaboration
 
 `human-requests.mjs` owns pending requests and the active-time budget. Requests are scoped to a run and browser namespace, expire, and are consumed only once. A CAPTCHA handoff accepts manual completion, not approval for the agent to solve it. Abort cancels pending waits. `agent-interactions.mjs` exposes the SDK help tool and gates important or every proposed action before the MCP request can reach Chrome. The active budget pauses during user input and ordinary pauses.

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { parseHTML } from "linkedom";
+import { JSDOM } from "jsdom";
 
 const html = await readFile(new URL("../sidepanel.html", import.meta.url), "utf8");
 const source = (await readFile(new URL("../tab-access.js", import.meta.url), "utf8")) + "\n" + await readFile(new URL("../sidepanel.js", import.meta.url), "utf8");
 const tasksSource = await readFile(new URL("../task-view.js", import.meta.url), "utf8");
+const markdownSource = (await Promise.all(["vendor/marked.js", "vendor/purify.js", "markdown.js"].map(path => readFile(new URL(`../${path}`, import.meta.url), "utf8")))).join("\n");
 const flush = () => new Promise(resolve => setImmediate(resolve));
 test("Tasks keeps workers with their parent tab, safely renders prompts, and submits schedule controls", async () => {
     const ui = await panel(), $ = id => ui.document.getElementById(id);
@@ -36,8 +38,9 @@ test("Tasks keeps workers with their parent tab, safely renders prompts, and sub
     assert.equal(payload.allowResearch, false);
     assert.equal($("schedule-prompt").value, "");
 });
-async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "" } = {}) {
-    const { window, document } = parseHTML(html);
+async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "", formatted = false } = {}) {
+    const window = formatted ? new JSDOM(html).window : parseHTML(html).window;
+    const document = window.document;
     // linkedom implements selected options but not HTMLSelectElement.value's setter.
     for (const select of document.querySelectorAll("select")) Object.defineProperty(select, "value", {
         get() { return this.querySelector("option[selected]")?.value ?? this.firstElementChild?.value ?? ""; },
@@ -65,7 +68,7 @@ async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [],
             return { ok: true };
         } }
     };
-    vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, location: { search }, setInterval: () => 1, clearInterval, Date });
+    vm.runInNewContext((formatted ? markdownSource : "") + "\n" + tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, location: { search }, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
     return { document, calls, queries, dispatch, agent, chrome, activate: info => activationListeners.forEach(listener => listener(info)), receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
@@ -234,6 +237,24 @@ test("tab activations in a different window do not change this workspace's selec
     ui.activate({ tabId: 34, windowId: 8 });
     await flush(); await flush();
     assert.equal(ui.document.getElementById("target-tab").value, "12");
+});
+
+test("live and History agent replies render Markdown while user messages remain literal", async () => {
+    const ui = await panel({ formatted: true }), $ = id => ui.document.getElementById(id);
+    ui.receive({ ...ui.agent, revision: 2, events: [
+        { kind: "user", text: "**literal** <img src=x>" },
+        { kind: "assistant", text: "## Results\n\n- **Liverpool** 3–2\n- [Source](https://example.com/)" },
+    ] });
+    assert.equal($("messages").querySelector(".assistant strong").textContent, "Liverpool");
+    assert.equal($("messages").querySelectorAll(".assistant li").length, 2);
+    assert.match($("messages").querySelector(".user").textContent, /\*\*literal\*\*/);
+    assert.equal($("messages").querySelector("img"), null);
+    const send = ui.chrome.runtime.sendMessage;
+    ui.chrome.runtime.sendMessage = message => message.method === "history-events"
+        ? Promise.resolve({ ok: true, history: { events: [{ kind: "assistant", text: "**Saved result**", time: 1 }], nextOffset: null } }) : send(message);
+    await ui.dispatch("history-tab");
+    $("history-content").querySelector("button").click(); await flush(); await flush();
+    assert.equal($("history-content").querySelector(".formatted-reply strong").textContent, "Saved result");
 });
 
 test("incognito chooser and Settings show existing and new tabs only from their source window", async () => {

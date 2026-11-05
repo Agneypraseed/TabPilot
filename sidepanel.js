@@ -194,6 +194,10 @@
       return "Browser tab";
     }
   }
+  function renderReply(element, text) {
+    if (globalThis.TabPilotMarkdown) TabPilotMarkdown.render(element, text);
+    else element.textContent = text || "";
+  }
   function showSettings(show) {
     $("settings-view").hidden = !show;
     $("agent-view").hidden = show;
@@ -282,8 +286,9 @@
           status: "Status",
           error: "Error",
         }[event.kind] || "Activity";
-      const text = document.createElement("p");
-      text.textContent = event.text || "";
+      const text = document.createElement(event.kind === "assistant" ? "div" : "p");
+      if (event.kind === "assistant") renderReply(text, event.text);
+      else text.textContent = event.text || "";
       row.append(label, text);
       if (event.detail) {
         const detail = document.createElement("p");
@@ -632,7 +637,8 @@
         } else {
           const row = document.createElement("div");
           row.className = `message ${event.kind}`;
-          row.textContent = event.text;
+          if (event.kind === "assistant") renderReply(row, event.text);
+          else row.textContent = event.text;
           $("messages").append(row);
         }
       }

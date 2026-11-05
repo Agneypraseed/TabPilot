@@ -4,6 +4,10 @@
     const event = { addListener() {} };
     const state = { revision: 1, status: "idle", runId: null, events: [], historyAvailable: true, historyRevision: 1, settings: { provider: "meta", model: "muse-spark-1.3", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }, { id: "openai", configured: true }] };
     let connected = true;
+    if (new URLSearchParams(location.search).has("formatted")) {
+        state.events = [{ kind: "user", text: "Show the match results with sources." },
+            { kind: "assistant", text: "## Match results\n\nSample results for a **formatting preview**:\n\n- **Fenerbahçe 3–2 Liverpool** — match summary\n- **Lens 1–9 Como** — match summary\n- **AEK 2–3 Real Madrid** — match summary\n\n### At a glance\n\n| Team | Goals |\n| --- | --- |\n| Liverpool | 2 |\n| Como | 9 |\n\nSource: [Example source](https://example.com/)\n\n> Illustrative data for visual testing only." }];
+    }
     const access = {};
     if (new URLSearchParams(location.search).has("tasks")) {
         state.jobs = [

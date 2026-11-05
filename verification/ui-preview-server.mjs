@@ -3,6 +3,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 const files = { "/tab-access.js": ["../tab-access.js", "text/javascript"], "/task-view.js": ["../task-view.js", "text/javascript"], "/": ["../sidepanel.html", "text/html"], "/sidepanel.css": ["../sidepanel.css", "text/css"], "/sidepanel.js": ["../sidepanel.js", "text/javascript"], "/attention-tone.js": ["../attention-tone.js", "text/javascript"], "/fixture.js": ["ui-fixture.js", "text/javascript"], "/page-runtime.js": ["../page-runtime.js", "text/javascript"] };
+Object.assign(files, { "/vendor/marked.js": ["../vendor/marked.js", "text/javascript"], "/vendor/purify.js": ["../vendor/purify.js", "text/javascript"], "/markdown.js": ["../markdown.js", "text/javascript"] });
 createServer(async (req, res) => {
     const route = new URL(req.url, "http://127.0.0.1:4380").pathname;
     if (req.headers.host === "127.0.0.1:4380" && route === "/cursor") {
