@@ -13,6 +13,7 @@ import { TaskStore } from "./task-store.mjs";
 import { requestBridge } from "./bridge-client.mjs";
 import { taskCommandSchema } from "./task-commands.mjs";
 import { LocalDownloads } from "./local-downloads.mjs";
+import { Notifications, notificationCommandSchema } from "./notifications.mjs";
 
 const historyId = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
@@ -36,7 +37,7 @@ async function readJson(request) {
     return JSON.parse(text);
 }
 
-export function createBridge({ token, timeoutMs = 20000, agentService, localDownloads, validateLocalDownload = async () => {} } = {}) {
+export function createBridge({ token, timeoutMs = 20000, agentService, localDownloads, notifications, validateLocalDownload = async () => {} } = {}) {
     if (!token) throw new Error("A pairing token is required.");
     let extension = null;
     let extensionScope = randomUUID();
@@ -79,6 +80,16 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
         }
         if (request.method !== "POST") {
             return reply(response, 405, { ok: false, error: "Use POST." });
+        }
+        if (request.url === "/notifications") {
+            if (!notifications) return reply(response, 503, { ok: false, error: "Restart the bridge to enable notifications." });
+            let command;
+            try { command = notificationCommandSchema.parse(await readJson(request)); }
+            catch { return reply(response, 400, { ok: false, error: "Invalid notification command (maximum 64 KB)." }); }
+            try {
+                const data = command.method === "status" ? notifications.status() : await notifications.send(command.payload);
+                return reply(response, 200, { ok: true, data });
+            } catch { return reply(response, 409, { ok: false, error: "Notification command failed. Check local notification settings." }); }
         }
         if (request.url === "/tasks") {
             if (extension?.readyState !== WebSocket.OPEN) return reply(response, 503, { ok: false, error: "Connect TabPilot before managing tasks." });
@@ -267,8 +278,9 @@ async function main() {
     catch (error) { if (error.code !== "ENOENT") throw new Error("Invalid local agent settings. Check .tabpilot/agent-settings.json."); }
     const token = randomBytes(32).toString("hex");
     const traceStore = new TraceHistory(fileURLToPath(new URL(".tabpilot/history/", import.meta.url)), { env: process.env, secrets: [token] });
+    const notifications = new Notifications({ sanitize: value => traceStore.clean(value) });
     const agentService = new TaskManager({ store: new TaskStore(fileURLToPath(new URL(".tabpilot/tasks.json", import.meta.url)), { sanitize: record => traceStore.clean(record) }),
-        browser: requestBridge, serviceOptions: { settings, traceStore, saveSettings: async next => {
+        browser: requestBridge, notifications, serviceOptions: { settings, traceStore, saveSettings: async next => {
         await writeFile(settingsFile, JSON.stringify(next, null, 2), { mode: 0o600 });
     } } });
     const localDownloads = new LocalDownloads({
@@ -283,7 +295,7 @@ async function main() {
         }
     });
     await Promise.all([agentService.ready, localDownloads.ready]);
-    const bridge = createBridge({ token, agentService, localDownloads, validateLocalDownload: async ({ tabId, url }) => {
+    const bridge = createBridge({ token, agentService, localDownloads, notifications, validateLocalDownload: async ({ tabId, url }) => {
         const snapshot = await requestBridge("snapshot", tabId);
         requireObservedDownload(snapshot, url);
     } });

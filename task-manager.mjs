@@ -12,13 +12,15 @@ const uuid = z.string().uuid();
 // Model calls remain in AgentService, so waiting schedules spend no API tokens.
 export class TaskManager {
     constructor({ store, browser, serviceOptions = {}, createSession = options => new AgentService(options), now = Date.now,
-        maxConcurrent = 3, autoTick = true } = {}) {
+        maxConcurrent = 3, autoTick = true, notifications } = {}) {
         this.store = store;
         this.browser = browser;
         this.serviceOptions = serviceOptions;
         this.createSession = createSession;
         this.now = now;
         this.maxConcurrent = maxConcurrent;
+        this.notifications = notifications;
+        this.pendingNotifications = new Set();
         this.sessionId = randomUUID();
         this.traceStore = serviceOptions.traceStore;
         this.listeners = new Set();
@@ -62,13 +64,28 @@ export class TaskManager {
         const base = service?.snapshot() ?? this.preferences.snapshot();
         return { ...base, sessionId: this.sessionId, revision: this.revision,
             ...(selected?.status === "paused" && !service?.active ? { status: "needs-review" } : {}),
-            selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning,
+            selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning, notificationWarning: this.notificationWarning,
             requests: [...this.sessions.values()].flatMap(session => session.snapshot().requests),
             jobs: [...this.records.values()].filter(record => this.visible(record)).map(({ checkpoint, ...record }) => ({ ...record,
                 activity: this.sessions.get(record.id)?.state.events.findLast(event => event.kind === "tool" || event.kind === "status")?.text,
                 needsRebind: record.scope !== this.connection.scope })) };
     }
     emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
+    notify(input) {
+        if (!this.notifications) return;
+        const pending = Promise.resolve().then(() => {
+            const status = this.notifications.status();
+            if (!Object.values(status).some(channel => channel.configured)) return { accepted: true };
+            return this.notifications.send(input);
+        }).then(result => {
+            if (!result.accepted) throw new Error("Notification was not accepted.");
+        }).catch(() => {
+            this.notificationWarning = "A task notification failed or its delivery is unknown. Check notification settings and the provider before retrying.";
+            this.emit();
+        });
+        this.pendingNotifications.add(pending);
+        void pending.finally(() => this.pendingNotifications.delete(pending));
+    }
     async save(record) {
         record.updatedAt = this.now();
         const saved = await this.store.upsert(record);
@@ -204,8 +221,15 @@ export class TaskManager {
         }
         this.sessions.set(record.id, session);
         this.executing.add(record.id);
+        const notifiedRequests = new Set();
         session.subscribe(state => {
             if (!session.active) return;
+            for (const request of state.requests ?? []) {
+                if (notifiedRequests.has(request.id)) continue;
+                notifiedRequests.add(request.id);
+                this.notify({ subject: request.kind === "approval" ? "TabPilot needs your permission" : "TabPilot needs your input",
+                    message: `Task: ${record.id}\nTab: ${record.tabId}\nRequest: ${request.id}\n\n${request.question.slice(0, 2400)}\n\nOpen TabPilot to review and respond. This notification does not grant approval. Expires: ${new Date(request.expiresAt).toISOString()}` });
+            }
             record.status = ["needs-input", "waiting-for-worker"].includes(state.status) ? state.status : ["paused", "pausing"].includes(state.status) ? "paused" : "running";
             void this.save(record).catch(error => { this.schedulerWarning = error.message; });
         });
@@ -295,6 +319,8 @@ export class TaskManager {
             }
             if (!terminal.has(record.status)) { record.status = "paused"; record.summary = "Continuation limit reached. Review progress and resume explicitly."; }
             await this.save(record);
+            if (record.status === "completed" && !record.parentTaskId) this.notify({ subject: "TabPilot task completed",
+                message: `Task: ${record.id}\nTab: ${record.tabId}\n\n${record.summary || "Verified completion recorded."}`.slice(0, 3000) });
             if (record.status === "completed" && record.repeatEveryMs && !record.cancelled) {
                 await this.create({ ...this.input(record), notBefore: this.now() + record.repeatEveryMs }, { seriesId: record.seriesId ?? record.id });
             }
@@ -304,5 +330,6 @@ export class TaskManager {
         clearInterval(this.timer);
         this.disconnect();
         await Promise.allSettled([...this.executions.values()]);
+        await Promise.allSettled([...this.pendingNotifications]);
     }
 }

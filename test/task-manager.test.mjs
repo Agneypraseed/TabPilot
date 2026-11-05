@@ -65,6 +65,84 @@ async function complete(options) {
     return { answer: "Read page", history: [{ role: "assistant", content: "Read page" }] };
 }
 
+test("permission alerts are sent once and cannot answer or bypass the pending approval", async t => {
+    const messages = [], responses = [];
+    let blocked = true;
+    const ui = setup(async (_prompt, options) => {
+        responses.push(await options.requestHuman({ kind: "approval", question: "Send the prepared report?", detail: "This sends an email." }));
+        blocked = false;
+        return complete(options);
+    }, { notifications: { status: () => ({ telegram: { configured: true } }), send: async input => {
+        messages.push(input); return { accepted: true };
+    } } });
+    t.after(() => ui.manager.close());
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create();
+    await until(() => messages.length === 1);
+    const request = ui.manager.snapshot().requests[0];
+    assert.equal(blocked, true);
+    assert.match(messages[0].subject, /permission/);
+    assert.match(messages[0].message, /Send the prepared report/);
+    assert.ok(messages[0].message.includes(request.id));
+    assert.deepEqual(responses, []);
+    const session = [...ui.manager.sessions.values()][0];
+    session.emit(); session.emit();
+    await flush();
+    assert.equal(messages.length, 1, "Repeated state updates must not send duplicate alerts");
+    await ui.manager.command("human-response", { id: request.id, runId: request.runId, scope: ui.scope, decision: "approve" });
+    await until(() => !ui.manager.active && messages.length === 2);
+    assert.equal(responses[0].decision, "approve");
+    assert.equal(blocked, false);
+    assert.equal(ui.manager.snapshot().requests.length, 0);
+    assert.match(messages[1].subject, /completed/);
+    assert.match(messages[1].message, /Read page/);
+});
+
+test("repeating tasks notify once for each verified occurrence", async t => {
+    const messages = [];
+    const ui = setup(async (_prompt, options) => complete(options), { notifications: {
+        status: () => ({ email: { configured: true } }), send: async input => { messages.push(input); return { accepted: true }; }
+    } });
+    t.after(() => ui.manager.close());
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create({ repeatEveryMs: 60000 });
+    await until(() => !ui.manager.active && ui.records.size === 2);
+    ui.advance(60000);
+    await ui.manager.tick();
+    await until(() => !ui.manager.active && ui.records.size === 3);
+    await ui.manager.tick();
+    assert.equal(messages.length, 2);
+    assert.notEqual(messages[0].message, messages[1].message, "Each occurrence identifies its own task");
+});
+
+test("a continuation limit or failed run never sends a completion alert", async t => {
+    for (const run of [async () => ({ answer: "Not finished", history: [] }), async () => { throw new Error("Model failed"); }]) {
+        const messages = [];
+        const ui = setup(run, { notifications: { status: () => ({ email: { configured: true } }), send: async input => {
+            messages.push(input); return { accepted: true };
+        } } });
+        t.after(() => ui.manager.close());
+        await ui.manager.connected({ scope: ui.scope });
+        await ui.create({ maxStages: 2 });
+        await until(() => !ui.manager.active);
+        assert.deepEqual(messages, []);
+        assert.notEqual([...ui.records.values()][0].status, "completed");
+    }
+});
+
+test("notification failures cannot fail a completed task or suppress its repeat", async t => {
+    const ui = setup(async (_prompt, options) => complete(options), { notifications: {
+        status: () => ({ email: { configured: true } }), send: async () => { throw new Error("private provider failure"); }
+    } });
+    t.after(() => ui.manager.close());
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create({ repeatEveryMs: 60000 });
+    await until(() => !ui.manager.active && ui.records.size === 2 && ui.manager.snapshot().notificationWarning);
+    assert.equal([...ui.records.values()].filter(record => record.status === "completed").length, 1);
+    assert.equal([...ui.records.values()].filter(record => record.status === "scheduled").length, 1);
+    assert.ok(!ui.manager.snapshot().notificationWarning.includes("private provider failure"));
+});
+
 test("scheduler waits without model calls, enforces enabled tab and records explicit completion", async () => {
     let calls = 0;
     const ui = setup(async (_prompt, options) => { calls++; return complete(options); });

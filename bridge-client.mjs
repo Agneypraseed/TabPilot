@@ -2,7 +2,19 @@ import { readFile } from "node:fs/promises";
 import { parseBrowserCommand } from "./commands.mjs";
 import { randomUUID } from "node:crypto";
 import { taskCommandSchema } from "./task-commands.mjs";
+import { notificationCommandSchema } from "./notifications.mjs";
 const clientSession = randomUUID();
+
+export async function requestNotification(command) {
+    const input = notificationCommandSchema.parse(command);
+    const config = await loadBridgeConfig();
+    const response = await fetch(config.url + "/notifications", { method: "POST", redirect: "error",
+        headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(input), signal: AbortSignal.timeout(25000) });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error ?? "Notification command failed.");
+    return result.data;
+}
 
 export async function requestTask(command) {
     const input = taskCommandSchema.parse(command);

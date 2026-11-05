@@ -8,10 +8,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createTabPilotMcp } from "../mcp.mjs";
 import { actionParameters, mcpActionName } from "../commands.mjs";
 
-const expectedTools = ["browser_tabs", "browser_snapshot", ...Object.keys(actionParameters).map(mcpActionName)].sort();
+const expectedTools = ["notifications_status", "notifications_send", "browser_tabs", "browser_snapshot", ...Object.keys(actionParameters).map(mcpActionName)].sort();
 
-async function connect(t, request) {
-    const server = createTabPilotMcp({ request });
+async function connect(t, request, notify) {
+    const server = createTabPilotMcp({ request, notify });
     const client = new Client({ name: "tabpilot-test", version: "1.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     t.after(async () => { await client.close(); await server.close(); });
@@ -29,6 +29,30 @@ test("MCP advertises read and action tools with distinct annotations and schemas
     const snapshot = tools.find(tool => tool.name === "browser_snapshot");
     assert.deepEqual(snapshot.inputSchema.required, ["tabId"]);
     assert.equal(snapshot.inputSchema.properties.tabId.type, "integer");
+});
+
+test("notification MCP tools restrict recipients and surface partial delivery failures", async t => {
+    const calls = [];
+    const client = await connect(t, async () => assert.fail("Notification cannot issue browser commands"), async command => {
+        calls.push(command);
+        return command.method === "status" ? { email: { configured: true } }
+            : { accepted: false, results: [{ channel: "email", accepted: false }] };
+    });
+    const { tools } = await client.listTools();
+    assert.equal(tools.find(tool => tool.name === "notifications_status").annotations.readOnlyHint, true);
+    const send = tools.find(tool => tool.name === "notifications_send");
+    assert.equal(send.annotations.readOnlyHint, false);
+    assert.equal(send.annotations.idempotentHint, false);
+    assert.equal(send.inputSchema.properties.to, undefined);
+    assert.equal((await client.callTool({ name: "notifications_status", arguments: {} })).structuredContent.email.configured, true);
+    const invalid = await client.callTool({ name: "notifications_send", arguments: { subject: "Test", message: "Test", channels: ["whatsapp"] } });
+    assert.equal(invalid.isError, true);
+    assert.equal(calls.length, 1);
+    const input = { subject: "Completed", message: "Verified the task", channels: ["email"] };
+    const sent = await client.callTool({ name: "notifications_send", arguments: input });
+    assert.equal(sent.isError, true);
+    assert.equal(sent.structuredContent.accepted, false);
+    assert.deepEqual(calls.at(-1), { method: "send", payload: input });
 });
 
 test("MCP routes tools to the bridge and returns structured JSON", async (t) => {
