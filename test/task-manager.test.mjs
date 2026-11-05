@@ -282,3 +282,95 @@ test("a newly revoked research tab cannot start a specialist or restore its own 
     assert.equal(calls.at(-1), "tabs", "Access must be rechecked after opening the tab");
     await ui.manager.close();
 });
+
+
+for (const kind of ["approval", "information", "handoff"]) test(`denying ${kind} pauses the task without another stage, repeated prompt or repeat schedule`, async t => {
+    let calls = 0, afterDenial = 0;
+    const messages = [];
+    const ui = setup(async (_prompt, options) => {
+        calls++;
+        await options.requestHuman({kind, question: "May I continue?", detail: "Controlled denial regression"});
+        afterDenial++;
+        return {answer:"Unable to finish",history:[]};
+    }, {notifications:{status:()=>({telegram:{configured:true}}),send:async input=>{messages.push(input);return {accepted:true};}}});
+    t.after(()=>ui.manager.close());
+    await ui.manager.connected({scope:ui.scope});await ui.create({maxStages:4,repeatEveryMs:60000});
+    await until(()=>ui.manager.snapshot().requests.length===1);
+    const request=ui.manager.snapshot().requests[0];
+    await ui.manager.command("human-response",{id:request.id,runId:request.runId,scope:ui.scope,decision:"deny"});
+    await until(()=>!ui.manager.active || calls>1);
+    assert.equal(calls,1,"Deny cannot relaunch the model in another stage");
+    assert.equal(afterDenial,0,"No work may proceed after Deny");
+    assert.equal(ui.records.size,1,"No repeating occurrence may be scheduled");
+    const record=[...ui.records.values()][0];assert.equal(record.status,"paused");assert.match(record.summary,/declined/i);
+    assert.equal(ui.manager.snapshot().requests.length,0);
+    await ui.manager.tick();assert.equal(calls,1);
+    assert.equal(messages.filter(message=>/completed/.test(message.subject)).length,0);
+});
+
+
+test("denying a specialist pauses its coordinator tree while unrelated tasks can continue", async t => {
+    let rootContinued=0,workerContinued=0;
+    const ui=setup(async(_prompt,options)=>{
+        if(options.targetTabId===34){await options.requestHuman({kind:"information",question:"Unrelated task question",detail:"Other task"});return complete(options);}
+        if(options.targetTabId===90){await options.requestHuman({kind:"handoff",question:"Specialist needs manual help",detail:"Worker task"});workerContinued++;return complete(options);}
+        const worker=JSON.parse(await options.extraTools.find(tool=>tool.name==="delegate_research").invoke(new RunContext(),JSON.stringify({url:"https://example.com/research",task:"Read a source"})));
+        await options.extraTools.find(tool=>tool.name==="collect_worker_result").invoke(new RunContext(),JSON.stringify({workerId:worker.workerId}));
+        rootContinued++;return complete(options);
+    },{browser:async method=>method==="tabs"?[{id:12},{id:34},{id:90}]:{tabId:90,url:"https://example.com/research",enabled:true}});
+    t.after(()=>ui.manager.close());
+    await ui.manager.connected({scope:ui.scope});await ui.create();
+    await until(()=>ui.manager.snapshot().requests.some(request=>request.tabId===90));
+    await ui.create({tabId:34});await until(()=>ui.manager.snapshot().requests.length===2);
+    const denied=ui.manager.snapshot().requests.find(request=>request.tabId===90);
+    await ui.manager.command("human-response",{id:denied.id,runId:denied.runId,scope:ui.scope,decision:"deny"});
+    await until(()=>[...ui.manager.records.values()].filter(record=>record.tabId!==34).every(record=>record.status==="paused")&&ui.manager.executing.size===1);
+    assert.equal(workerContinued,0);assert.equal(rootContinued,0);
+    const other=ui.manager.snapshot().requests[0];assert.equal(other.tabId,34);
+    await ui.manager.command("human-response",{id:other.id,runId:other.runId,scope:ui.scope,decision:"answer",text:"Proceed"});
+    await until(()=>!ui.manager.active);
+    assert.equal([...ui.records.values()].find(record=>record.tabId===34).status,"completed");
+});
+
+
+test("a denial also prevents a related worker from starting after a pending stage save", async t => {
+    let release,blocked=false,workerCalls=0;
+    const barrier=new Promise(resolve=>{release=resolve;});
+    const ui=setup(async(_prompt,options)=>{
+        if(options.targetTabId===90){workerCalls++;return complete(options);}
+        await options.extraTools.find(tool=>tool.name==="delegate_research").invoke(new RunContext(),JSON.stringify({url:"https://example.com/research",task:"Read a source"}));
+        await options.requestHuman({kind:"approval",question:"Continue with the report?",detail:"Test a paused worker"});
+        return complete(options);
+    },{browser:async method=>method==="tabs"?[{id:12},{id:90}]:{tabId:90,url:"https://example.com/research",enabled:true}});
+    t.after(async()=>{release();await ui.manager.close();});
+    const save=ui.manager.store.upsert;
+    ui.manager.store.upsert=async record=>{
+        if(record.role==="research"&&record.stage===1&&!blocked){blocked=true;await barrier;}
+        return save(record);
+    };
+    await ui.manager.connected({scope:ui.scope});await ui.create();
+    await until(()=>blocked&&ui.manager.snapshot().requests.length===1);
+    const request=ui.manager.snapshot().requests[0];
+    await ui.manager.command("human-response",{id:request.id,runId:request.runId,scope:ui.scope,decision:"deny"});
+    release();await until(()=>!ui.manager.active);
+    assert.equal(workerCalls,0);
+    assert.ok([...ui.records.values()].every(record=>record.status==="paused"));
+});
+
+test("a task denied by the user restarts only on an explicit resume",async t=>{
+    let calls=0;
+    const ui=setup(async(_prompt,options)=>{
+        if(++calls===1)await options.requestHuman({kind:"information",question:"Choose a report",detail:"Test denial"});
+        return complete(options);
+    });t.after(()=>ui.manager.close());
+    await ui.manager.connected({scope:ui.scope});await ui.create();
+    await until(()=>ui.manager.snapshot().requests.length===1);
+    const request=ui.manager.snapshot().requests[0];
+    await ui.manager.command("human-response",{id:request.id,runId:request.runId,scope:ui.scope,decision:"deny"});
+    await until(()=>!ui.manager.active);await ui.manager.tick();assert.equal(calls,1);
+    const original=[...ui.records.values()][0];ui.advance(1);
+    await ui.manager.command("task-resume",{taskId:original.id,tabId:12,scope:ui.scope});
+    await until(()=>!ui.manager.active);
+    assert.equal(calls,2);assert.equal(ui.records.get(original.id).status,"cancelled");
+    assert.equal([...ui.records.values()].find(record=>record.resumedFrom===original.id).status,"completed");
+});

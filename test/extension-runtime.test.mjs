@@ -227,3 +227,33 @@ test('browser runtime delegates notification transport to background without for
  const result=await runtime.command('notification-check');assert.equal(result.check.ok,true);assert.equal(calls.length,2);
  assert.equal(Object.hasOwn(calls[1],'input'),false);
 });
+
+
+for(const gate of ['help','browser-action'])test(`real SDK denial at ${gate} ends execution before another model call or browser action`,async t=>{
+ const f=fixture();let turns=0,actions=0;
+ const rpc=async(operation,payload)=>{
+  if(operation==='browser'&&payload.method==='snapshot')return {title:'Test page',url:'https://example.com',text:'Send report',truncated:false,elements:[{ref:'send',name:'Send report',role:'button'}]};
+  if(operation==='browser'&&payload.method==='click'){actions++;return {clicked:true};}
+  return f.rpc(operation,payload);
+ };
+ const call=(name,args)=>({usage:new Usage({requests:1}),output:[{type:'function_call',callId:'deny-'+turns,name,arguments:JSON.stringify(args)}]});
+ const model={async getResponse(){
+  turns++;
+  if(gate==='help')return call('request_user_help',{kind:'handoff',question:'Please take over',detail:'Controlled denial test'});
+  if(turns===1)return call('browser_snapshot',{tabId:12});
+  return call('browser_click',{tabId:12,ref:'send'});
+ },async *getStreamedResponse(){}};
+ const runtime=await createExtensionRuntime({...f,rpc,configure:async()=>({model,modelSettings:{store:false},close:async()=>{}})});t.after(()=>runtime.close());
+ await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret}});
+ await runtime.command('task-create',{prompt:'Test denial gate',tabId:12,mode:'browser',maxStages:4,allowResearch:false});
+ await until(()=>runtime.snapshot().requests.length===1);
+ const request=runtime.snapshot().requests[0];const before=turns;
+ await assert.rejects(runtime.command('human-response',{id:request.id,runId:'stale-run',decision:'deny'}));
+ assert.equal(runtime.manager.active,true,'Stale denial cannot stop current work');
+ await runtime.command('human-response',{id:request.id,runId:request.runId,decision:'deny'});
+ await until(()=>!runtime.manager.active);
+ assert.equal(turns,before);assert.equal(actions,0);assert.equal(runtime.snapshot().jobs[0].stage,1);
+ assert.equal(runtime.snapshot().jobs[0].status,'paused');assert.equal(runtime.snapshot().status,'needs-review');
+ assert.equal(runtime.snapshot().requests.length,0);
+ await runtime.command('tick');assert.equal(turns,before);
+});

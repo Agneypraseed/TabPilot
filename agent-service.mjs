@@ -86,10 +86,19 @@ export class AgentService {
             const response = await this.humanRequests.request(request, {
                 signal: this.controller.signal, runId: this.state.runId, tabId: this.state.tabId, scope: this.traceContext?.scope ?? this.runScope
             });
+            if (response.decision === "deny" && !this.declinedRequest) this.decline(request);
+            this.controller.signal.throwIfAborted();
             this.state.status = this.pauseAfterInput ? "pausing" : "running";
             this.event("user", response.decision === "answer" ? response.text : `User response: ${response.decision}`, { responseKind: request.kind });
             return response;
         } finally { this.budget?.resume(); }
+    }
+    decline(request) {
+        this.declinedRequest = { kind: request.kind, question: request.question };
+        this.state.status = "stopping";
+        const reason = new Error("Paused because you declined the request. Review the task and give new direction before resuming.");
+        this.controller.abort(reason);
+        this.event("user", "User declined the request. The task is paused for review.", { responseKind: request.kind });
     }
     async checkpoint() {
         this.controller.signal.throwIfAborted();
@@ -108,7 +117,11 @@ export class AgentService {
     async command(method, payload = {}) {
         if (method === "state") return this.snapshot();
         if (method === "human-response") {
-            this.humanRequests.respond(payload);
+            const request = this.humanRequests.list().find(item => item.id === payload.id);
+            const response = this.humanRequests.respond(payload);
+            // Abort in this turn, before the resolved tool promise or any new
+            // SDK/model/browser work can run. Invalid/stale replies throw above.
+            if (response.decision === "deny") this.decline(request);
             return this.snapshot();
         }
         if (["history-list", "history-events", "history-image"].includes(method)) {
@@ -144,6 +157,7 @@ export class AgentService {
             this.controller = new AbortController();
             this.runScope = input.scope;
             this.pauseAfterInput = false;
+            this.declinedRequest = null;
             this.steering = [];
             this.state = { ...this.state, status: "running", runId: randomUUID(), tabId: input.tabId, mode: input.mode, screenshot: null };
             this.traceContext = this.traceStore && input.scope ? { scope: input.scope, tabId: input.tabId, runId: this.state.runId } : null;

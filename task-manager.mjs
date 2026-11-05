@@ -184,6 +184,7 @@ export class TaskManager {
             return this.snapshot();
         }
         await session.command(method, payload);
+        if (method === "human-response" && payload.decision === "deny") await this.pauseDeclinedTask(session);
         this.emit(); return this.snapshot();
     }
     input(record) {
@@ -219,6 +220,9 @@ export class TaskManager {
         finally { this.ticking = false; }
     }
     async launch(record) {
+        // Stores may return clones. Keep execution and UI controls on the same
+        // in-memory record even while a checkpoint/stage save is pending.
+        record = this.records.get(record.id) ?? record;
         let completion;
         const finish = tool({ name: "complete_task", description: "Mark a task complete only after its requested outcome is verified in browser observations. Include the observed evidence.",
             parameters: z.object({ summary: z.string().min(1).max(6000), evidence: z.string().min(1).max(6000) }).strict(),
@@ -260,6 +264,37 @@ export class TaskManager {
         });
         this.executions.set(record.id, execution);
         void execution.finally(() => this.executions.delete(record.id));
+    }
+    async pauseDeclinedTask(session) {
+        let root = [...this.records.values()].find(record => this.sessions.get(record.id) === session);
+        if (!root) return;
+        while (root.parentTaskId) {
+            const parent = this.records.get(root.parentTaskId);
+            if (!parent || parent.scope !== root.scope) break;
+            root = parent;
+        }
+        const ids = new Set([root.id]);
+        let changed;
+        do {
+            changed = false;
+            for (const record of this.records.values()) if (record.scope === root.scope && ids.has(record.parentTaskId) && !ids.has(record.id)) {
+                ids.add(record.id); changed = true;
+            }
+        } while (changed);
+        const affected = [...this.records.values()].filter(record => ids.has(record.id) && !terminal.has(record.status));
+        // Mark the whole related task tree before yielding. A coordinator or
+        // queued specialist must not continue around the user's decision.
+        for (const record of affected) {
+            record.declinedRequest = session.declinedRequest;
+            record.status = "paused";
+            record.summary = "Paused because you declined a request. Review the task and give new direction before resuming.";
+            const worker = this.sessions.get(record.id);
+            if (worker?.active) {
+                worker.declinedRequest = session.declinedRequest;
+                worker.controller.abort(new Error(record.summary));
+            }
+        }
+        await Promise.all(affected.map(record => this.save(record)));
     }
     async cancel(record) {
         record.cancelled = true;
@@ -320,10 +355,11 @@ export class TaskManager {
     }
     async execute(record, session, completion, connection) {
         try {
-            while (!record.cancelled && record.stage < record.maxStages) {
+            while (!record.cancelled && !record.declinedRequest && record.stage < record.maxStages) {
                 record.stage++;
                 await this.save(record);
                 if (record.cancelled) { record.status = "cancelled"; break; }
+                if (record.declinedRequest) { record.status = "paused"; break; }
                 if (!connection || connection !== this.connection) { record.status = "interrupted"; break; }
                 await session.command("start", { scope: record.scope, tabId: record.tabId, mode: record.mode, tabTitle: record.tabTitle,
                     prompt: record.stage === 1 ? record.prompt : "Continue the same task from your saved observations. Check the current page before acting. Call complete_task only after verifying the outcome." });
@@ -331,12 +367,18 @@ export class TaskManager {
                 record.runId = session.state.runId;
                 record.summary = session.state.events.findLast(event => event.kind === "assistant" || event.kind === "error")?.text;
                 if (record.cancelled) { record.status = "cancelled"; break; }
+                if (record.declinedRequest || session.declinedRequest) {
+                    record.declinedRequest ??= session.declinedRequest;
+                    record.status = "paused";
+                    record.summary = "Paused because you declined a request. Review the task and give new direction before resuming.";
+                    break;
+                }
                 if (session.state.status !== "completed") { record.status = session.state.status === "stopped" ? "interrupted" : "failed"; break; }
                 if (completion() && ![...this.records.values()].some(child => child.parentTaskId === record.id && !terminal.has(child.status))) { record.status = "completed"; record.summary = completion().summary; record.evidence = completion().evidence; break; }
                 record.status = "continuing";
                 await this.save(record);
             }
-            if (!terminal.has(record.status)) { record.status = "paused"; record.summary = "Continuation limit reached. Review progress and resume explicitly."; }
+            if (!terminal.has(record.status) && !record.declinedRequest) { record.status = "paused"; record.summary = "Continuation limit reached. Review progress and resume explicitly."; }
             await this.save(record);
             if (record.status === "completed" && !record.parentTaskId) this.notify({ subject: "TabPilot task completed",
                 message: `Task: ${record.id}\nTab: ${record.tabId}\n\n${record.summary || "Verified completion recorded."}`.slice(0, 3000) }, { taskId: record.id });
