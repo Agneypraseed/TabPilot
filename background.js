@@ -42,8 +42,14 @@ chrome.runtime.onStartup?.addListener(() => {
     void chrome.storage.local.remove?.("tabAccessRevocations");
 });
 
-// A persistent side panel remains visible while the agent uses the page.
-chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+// Some Chromium-based hosts expose sidePanel without implementing every method.
+// Keep the worker usable there; opening the panel is an optional UI capability.
+try {
+    const setPanelBehavior = chrome.sidePanel?.setPanelBehavior;
+    if (typeof setPanelBehavior === "function") {
+        Promise.resolve(setPanelBehavior.call(chrome.sidePanel, { openPanelOnActionClick: false })).catch(() => {});
+    }
+} catch {}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     void browser.clearAccess(tabId).catch(() => {});

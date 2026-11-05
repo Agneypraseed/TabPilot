@@ -44,11 +44,13 @@ async function panel({ initialActiveTab = 12 } = {}) {
         set(value) { for (const option of this.querySelectorAll("option")) option.toggleAttribute("selected", option.value === String(value)); }
     });
     let runtimeListener;
+    const activationListeners = [];
     const stored = {}, calls = [], queries = [];
     const agent = { revision: 1, status: "idle", runId: "run-1", events: [], historyAvailable: true, historyRevision: 0, settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
     const event = { addListener() {} };
     const chrome = {
-        tabs: { query: async query => { queries.push(query); const available = [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 8, title: "Other tab", url: "https://other.example/" }]; return query.active ? available.filter(tab => tab.id === initialActiveTab) : available; }, create: async args => calls.push({ createdTab: args }), onActivated: event, onUpdated: event, onRemoved: event },
+        tabs: { query: async query => { queries.push(query); const available = [{ id: 12, windowId: 7, active: true, title: "Test <b>tab</b>", url: "https://example.com/" }, { id: 34, windowId: 8, title: "Other tab", url: "https://other.example/" }]; return query.active ? available.filter(tab => tab.id === initialActiveTab && (!query.windowId || tab.windowId === query.windowId)) : available; }, create: async args => calls.push({ createdTab: args }), onActivated: { addListener(fn) { activationListeners.push(fn); } }, onUpdated: event, onRemoved: event },
+        windows: { getCurrent: async () => ({ id: 7 }) },
         storage: { session: { get: async () => stored }, onChanged: event },
         runtime: { getURL: path => `chrome-extension://test/${path}`, onMessage: { addListener(fn) { runtimeListener = fn; } }, sendMessage: async message => {
             calls.push(message);
@@ -63,10 +65,10 @@ async function panel({ initialActiveTab = 12 } = {}) {
             return { ok: true };
         } }
     };
-    vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, setInterval: () => 1, clearInterval, Date });
+    vm.runInNewContext(tasksSource + "\n" + source, { chrome, document, window, URL, URLSearchParams, location: { search: "" }, setInterval: () => 1, clearInterval, Date });
     await flush();
     const dispatch = async (id, type = "click") => { document.getElementById(id).dispatchEvent(new window.Event(type, { bubbles: true, cancelable: true })); await flush(); };
-    return { document, calls, queries, dispatch, agent, chrome, receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
+    return { document, calls, queries, dispatch, agent, chrome, activate: info => activationListeners.forEach(listener => listener(info)), receive: state => runtimeListener({ type: "tabpilot:agent-event", state }) };
 }
 
 test("side panel defaults to access, supports revocation, submits task with mode and renders untrusted text safely", async () => {
@@ -219,8 +221,16 @@ test("Settings lists all windows and revokes a specific tab without changing the
     assert.ok([...list.querySelectorAll("button")].some(button => button.getAttribute("aria-label") === "Revoke access: Other tab"));
 });
 
-test("all-window chooser still starts on the current window's active tab", async () => {
-    const ui = await panel({ initialActiveTab: 34 });
-    assert.equal(ui.document.getElementById("target-tab").value, "34");
+test("all-window chooser starts on the UI window's active tab", async () => {
+    const ui = await panel();
+    assert.equal(ui.document.getElementById("target-tab").value, "12");
     assert.equal(ui.document.getElementById("target-tab").querySelectorAll("option").length, 2);
+    assert.ok(ui.queries.some(query => query.active && query.windowId === 7));
+});
+
+test("tab activations in a different window do not change this workspace's selected tab", async () => {
+    const ui = await panel();
+    ui.activate({ tabId: 34, windowId: 8 });
+    await flush(); await flush();
+    assert.equal(ui.document.getElementById("target-tab").value, "12");
 });

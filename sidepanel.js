@@ -5,6 +5,9 @@
     ? "popup"
     : "workspace";
   const sourceWindow = params.get("window");
+  let contextWindowId = sourceWindow && /^\d+$/.test(sourceWindow)
+    ? Number(sourceWindow)
+    : null;
   const initialTab = Number(params.get("tab"));
   let initialTarget = true;
   let connected = false,
@@ -412,26 +415,41 @@
       ? "API keys stay on your local bridge."
       : "Add this provider’s API key to .env.local and restart the bridge.";
   }
+  async function resolveContextWindow() {
+    if (Number.isInteger(contextWindowId)) return contextWindowId;
+    try {
+      const current = await chrome.windows?.getCurrent?.();
+      if (Number.isInteger(current?.id)) contextWindowId = current.id;
+    } catch {}
+    return contextWindowId;
+  }
   async function refreshTabs(preferActive = false, activeTabId) {
+    const activeQuery = Number.isInteger(contextWindowId)
+      ? { active: true, windowId: contextWindowId }
+      : { active: true, currentWindow: true };
     const [available, stored, current] = await Promise.all([
       chrome.tabs.query({}),
       TabPilotTabAccess.read(chrome),
-      preferActive && activeTabId === undefined ? chrome.tabs.query(sourceWindow && /^\d+$/.test(sourceWindow)
-        ? { active: true, windowId: Number(sourceWindow) } : { active: true, currentWindow: true }) : [],
+      preferActive && activeTabId === undefined ? chrome.tabs.query(activeQuery) : [],
     ]);
     tabs = available.filter((tab) => TabPilotTabAccess.supported(tab.url));
     const oldId = selected?.id;
+    const oldTab = tabs.find((tab) => tab.id === oldId);
+    const contextTabs = Number.isInteger(contextWindowId)
+      ? tabs.filter((tab) => tab.windowId === contextWindowId)
+      : tabs;
     const desired = active() && !agent?.jobs
       ? agent.tabId
       : preferActive
-        ? (initialTarget && initialTab) || activeTabId || current.find(t => TabPilotTabAccess.supported(t.url))?.id || available.find((t) => t.active)?.id
+        ? (initialTarget && initialTab) || activeTabId || current.find(t => TabPilotTabAccess.supported(t.url))?.id || contextTabs.find((t) => t.active)?.id
         : oldId;
     initialTarget = false;
     selected =
       tabs.find((t) => t.id === desired) ??
-      tabs.find((t) => t.id === oldId) ??
-      tabs.find((t) => t.active) ??
-      tabs[0] ??
+      (preferActive && Number.isInteger(contextWindowId) && oldTab?.windowId !== contextWindowId ? null : oldTab) ??
+      contextTabs.find((t) => t.active) ??
+      contextTabs[0] ??
+      (!preferActive && !Number.isInteger(contextWindowId) ? tabs.find((t) => t.active) ?? tabs[0] : null) ??
       null;
     tabs = tabs.map((tab) => ({
       ...tab,
@@ -439,9 +457,12 @@
     }));
     selected = tabs.find((tab) => tab.id === selected?.id) ?? null;
     $("target-tab").replaceChildren();
-    if (!tabs.length) {
+    if (!tabs.length || (preferActive && Number.isInteger(contextWindowId) && !selected)) {
       const option = document.createElement("option");
-      option.textContent = "Open a web page";
+      option.textContent = tabs.length ? "Choose a web tab" : "Open a web page";
+      option.value = "";
+      option.disabled = true;
+      option.selected = true;
       $("target-tab").append(option);
     }
     for (const tab of tabs) {
@@ -920,9 +941,17 @@
       receive(message.state);
     }
   });
-  chrome.tabs.onActivated.addListener(info =>
-    refreshTabs(agent?.jobs ? true : !active(), info?.tabId).catch((e) => notice(e.message)),
-  );
+  chrome.tabs.onActivated.addListener((info) => {
+    void (async () => {
+      await resolveContextWindow();
+      if (Number.isInteger(contextWindowId) && info?.windowId !== contextWindowId) return;
+      if (!Number.isInteger(contextWindowId)) {
+        const [current] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (current?.windowId !== info?.windowId) return;
+      }
+      await refreshTabs(agent?.jobs ? true : !active(), info?.tabId);
+    })().catch((error) => notice(error.message));
+  });
   chrome.tabs.onUpdated.addListener((_id, change) => {
     if (change.status === "complete" || change.title)
       refreshTabs().catch(() => {});
@@ -945,7 +974,8 @@
     notice(
       "This browser opened a workspace tab. Desktop Chrome also supports keeping TabPilot beside the page.",
     );
-  Promise.all([sync(), refreshTabs(true)]).catch((error) =>
-    notice(error.message),
-  );
+  (async () => {
+    await resolveContextWindow();
+    await Promise.all([sync(), refreshTabs(true)]);
+  })().catch((error) => notice(error.message));
 })();

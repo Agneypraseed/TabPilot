@@ -7,7 +7,7 @@ import { backgroundSource, mockDebugger } from "./background-source.mjs";
 const popupSource = (await readFile(new URL("../tab-access.js", import.meta.url), "utf8")) + "\n" + await readFile(new URL("../popup.js", import.meta.url), "utf8");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function background({ url = "https://example.com/", revokeDuringRead = false } = {}) {
+function background({ url = "https://example.com/", revokeDuringRead = false, sidePanel } = {}) {
     const stored = { "tab:12": true };
     let listener;
     let executions = 0;
@@ -21,6 +21,7 @@ function background({ url = "https://example.com/", revokeDuringRead = false } =
             return [{ result: { text: "Example" } }];
         } }
     };
+    if (sidePanel !== undefined) chrome.sidePanel = sidePanel;
     mockDebugger(chrome, async () => (await chrome.scripting.executeScript())[0].result);
     vm.runInNewContext(backgroundSource, { chrome, URL });
     return {
@@ -30,6 +31,10 @@ function background({ url = "https://example.com/", revokeDuringRead = false } =
         }
     };
 }
+
+test("background tolerates a sidePanel namespace without setPanelBehavior", () => {
+    assert.doesNotThrow(() => background({ sidePanel: {} }));
+});
 
 test("background rejects content-script and foreign-extension requests", async () => {
     const worker = background();
