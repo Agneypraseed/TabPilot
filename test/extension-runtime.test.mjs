@@ -215,3 +215,15 @@ test('IndexedDB runtime preserves legacy tasks and sends completion alerts after
  assert.deepEqual(f.data.local['extension.tasks.v1'],[legacy],'Original migration source remains intact');
  assert.equal(runtime.snapshot().notificationWarning,undefined);
 });
+
+
+test('browser runtime delegates notification transport to background without forwarding model keys or unsanitized messages',async t=>{
+ const f=fixture();const calls=[];
+ const runtime=await createExtensionRuntime({...f,notificationSend:async payload=>{calls.push(payload);return {accepted:true,results:[{channel:'telegram',accepted:true}]};},notificationCheck:async payload=>{calls.push(payload);return {ok:true,message:'Verified. No alert was sent.'};}});t.after(()=>runtime.close());
+ await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret,TELEGRAM_BOT_TOKEN:'12345:fixture-token',TABPILOT_TELEGRAM_CHAT_ID:'12345'}});
+ await runtime.command('notification-test',{channel:'telegram'});
+ assert.deepEqual(Object.keys(calls[0].env).sort(),['TABPILOT_TELEGRAM_CHAT_ID','TELEGRAM_BOT_TOKEN']);
+ assert.equal(JSON.stringify(calls[0]).includes(secret),false);
+ const result=await runtime.command('notification-check');assert.equal(result.check.ok,true);assert.equal(calls.length,2);
+ assert.equal(Object.hasOwn(calls[1],'input'),false);
+});

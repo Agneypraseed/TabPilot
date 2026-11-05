@@ -3,6 +3,7 @@ importScripts("tab-access.js");
 importScripts("browser-controller.js");
 importScripts("downloads-controller.js");
 importScripts("attention-alerts.js");
+importScripts("vendor/notification-network.js");
 
 const browser = new TabPilotBrowser(chrome, tabPilotPage);
 const downloads = new TabPilotDownloads(chrome, { permitted: tabId => browser.permitted(tabId) });
@@ -171,6 +172,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const {operation,payload={}}=message;
         const execute=async()=>{
+            if(operation==='notification-send'||operation==='notification-check') {
+                if((await getExecutionMode())!=='extension')throw new Error('Extension notifications are disabled in developer-server mode.');
+                return operation==='notification-check'?globalThis.tabPilotCheckTelegram(payload):globalThis.tabPilotSendNotification(payload);
+            }
             if(operation==='browser') {
                 if((await getExecutionMode())!=='extension')throw new Error('The extension agent is disabled in local server mode.');
                 return browserCommand(payload.method,payload.tabId,payload.params);
@@ -188,7 +193,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if(operation==='storage-remove')return storage.remove(payload.key);
             throw new Error('Unknown runtime request.');
         };
-        execute().then(data=>sendResponse({ok:true,data}),error=>sendResponse({ok:false,error:operation==='browser'?error.message:'Extension storage operation failed. Check available local storage space.'}));return true;
+        execute().then(data=>sendResponse({ok:true,data}),error=>sendResponse({ok:false,error:operation==='browser'?error.message:operation.startsWith('notification-')?'The background notification service could not process the request. Check extension site access and reload TabPilot.':'Extension storage operation failed. Check available local storage space.'}));return true;
     }
     if (message.type === "tabpilot:bridge-status" || message.type === "tabpilot:ui-state") {
         getExecutionMode().then(async mode=>{

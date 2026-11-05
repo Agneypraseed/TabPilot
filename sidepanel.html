@@ -335,8 +335,9 @@
             <input id="telegram-chat" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="Numeric chat ID" />
             <div id="telegram-chat-saved" class="saved-credential" hidden><span id="telegram-chat-saved-value" class="saved-credential-value"></span><button id="telegram-chat-change" class="secondary" type="button" aria-label="Change saved Telegram chat ID">Change</button></div>
             <p id="telegram-status" class="help">Not configured.</p>
+            <button id="check-telegram" class="secondary" type="button">Check connection</button>
             <button id="test-telegram" class="secondary" type="button">Send test alert</button>
-            <p class="help">Tests the saved settings. Save any changes first. Delivery failures appear here and beside the agent’s question.</p>
+            <p class="help">Save changes first. Check connection verifies the bot and chat without sending a message. Send test alert sends one message; check the chat before repeating a failed or timed-out send.</p>
             <label class="check-label"><input id="clear-telegram" type="checkbox" /> Remove Telegram settings</label>
           </details>
           <details class="credential-group">

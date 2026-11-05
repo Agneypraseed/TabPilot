@@ -462,6 +462,7 @@
     $("extension-credentials").hidden = !local;
     $("notification-settings").hidden = !local;
     $("test-telegram").disabled = !connected || !local;
+    $("check-telegram").disabled = !connected || !local;
     $("credential-storage").hidden = !local;
     $("developer-bridge").hidden = local;
     $("apply-execution-mode").disabled = active();
@@ -1031,9 +1032,23 @@
       notice(error.message);
     }
   });
+  $("check-telegram").addEventListener("click", async () => {
+    $("check-telegram").disabled = true;
+    try {
+      if(chrome.permissions?.request && !await chrome.permissions.request({origins:["https://api.telegram.org/*"]}))throw new Error("Telegram access was not granted. No alert was sent.");
+      notice("Checking Telegram connection without sending an alert…");
+      const {check} = await command("notification-check");
+      notice(check.ok ? check.message : check.error, check.ok);
+    } catch(error){notice(error.message);}
+    finally{$("check-telegram").disabled=false;}
+  });
   $("test-telegram").addEventListener("click", async () => {
     $("test-telegram").disabled = true;
     try {
+      if(chrome.permissions?.request) {
+        const granted = await chrome.permissions.request({origins:["https://api.telegram.org/*"]});
+        if(!granted)throw new Error("Telegram access was not granted. No test message was sent.");
+      }
       const result = await command("notification-test", { channel: "telegram" });
       const accepted = result.notification?.accepted === true;
       notice(accepted ? "Telegram accepted the test alert. Check the saved chat or channel." : result.notification?.results?.[0]?.error || result.notification?.error || "The Telegram test failed. Check Settings.", accepted);

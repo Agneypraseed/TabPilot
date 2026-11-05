@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TaskManager } from './task-manager.mjs';
 import { ExtensionDatabaseStorage, migrateExtensionData } from './extension-database.mjs';
-import { Notifications } from './notifications.mjs';
+import { Notifications, notificationInputSchema } from './notifications.mjs';
 import { ExtensionTaskStore, ExtensionTraceHistory } from './extension-storage.mjs';
 import { createConfiguredModel } from './agent-models.mjs';
 import { runBrowserAgent } from './agent-runner.mjs';
@@ -13,7 +13,7 @@ const configSchema = z.object({executionMode: z.enum(['extension','bridge']).opt
 
 // The worker only talks to our extension host. Chrome APIs remain in the
 // service worker; no pairing token, Node process, or localhost is used here.
-export async function createExtensionRuntime({ rpc, scope, profileId, onState = () => {}, onHistory = () => {}, enabled = true, dataStorage, notificationFetch, configure = createConfiguredModel, run = runBrowserAgent }) {
+export async function createExtensionRuntime({ rpc, scope, profileId, onState = () => {}, onHistory = () => {}, enabled = true, dataStorage, notificationFetch, notificationSend, notificationCheck, configure = createConfiguredModel, run = runBrowserAgent }) {
     const storage = area => ({get:key => rpc('storage-get',{area,key}),set:items => rpc('storage-set',{area,items}),remove:key => rpc('storage-remove',{area,key})});
     const local = storage('local'), session = storage('session');
     const database = dataStorage ?? (globalThis.indexedDB ? new ExtensionDatabaseStorage() : local);
@@ -25,6 +25,12 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
     let env = credentialSchema.parse({...persistent.extensionCredentials,...temporary.extensionSessionCredentials});
     const trace = new ExtensionTraceHistory(database,{env,...storageLimits});
     const notifications = new Notifications({env,fetch:notificationFetch,sanitize:value=>trace.clean(value)});
+    if(notificationSend) notifications.send = value => {
+        const input = notificationInputSchema.parse(value);
+        const notificationKeys = ['TELEGRAM_BOT_TOKEN','TABPILOT_TELEGRAM_CHAT_ID','RESEND_API_KEY','TABPILOT_EMAIL_FROM','TABPILOT_EMAIL_TO'];
+        return notificationSend({env:Object.fromEntries(notificationKeys.filter(key=>!!notifications.env[key]).map(key=>[key,notifications.env[key]])),
+            input:{...input,subject:trace.clean(input.subject),message:trace.clean(input.message)}});
+    };
     const manager = new TaskManager({autoTick:false,
         store:new ExtensionTaskStore(database,{...storageLimits,sanitize:record=>trace.clean(record)}),
         browser:(method,tabId,params)=>rpc('browser',{method,tabId,params}),
@@ -72,6 +78,10 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
     async function command(method,payload={}) {
         if(method==='activate'){if(!manager.connection){clearInterval(manager.timer);manager.timer=setInterval(()=>void manager.tick().catch(error=>{manager.schedulerWarning=error.message;manager.emit();}),1000);manager.timer.unref?.();await manager.connected({scope,profileId});}return {ok:true,state:snapshot(),runtime:metadata()};}
         if(method==='suspend'){await manager.close();return {ok:true,runtime:metadata()};}
+        if(method==='notification-check'){
+            if(!notificationCheck)throw new Error('The connection checker is unavailable. Reload TabPilot.');
+            return {ok:true,check:await notificationCheck({env:Object.fromEntries(['TELEGRAM_BOT_TOKEN','TABPILOT_TELEGRAM_CHAT_ID'].map(key=>[key,notifications.env[key]??'']))})};
+        }
         if(method==='notification-test'){
             const {channel}=z.object({channel:z.enum(['telegram','email'])}).strict().parse(payload);
             const notification=await notifications.send({subject:'TabPilot test alert',message:'This is the test alert you requested from TabPilot Settings. Reply to agent requests inside TabPilot.',channels:[channel]});
@@ -101,7 +111,7 @@ if (typeof WorkerGlobalScope !== 'undefined' && globalThis instanceof WorkerGlob
         if(data.rpcId){const request=pending.get(data.rpcId);if(request){pending.delete(data.rpcId);data.error?request.reject(new Error(data.error)):request.resolve(data.result);}return;}
         if(!data.id)return;
         try {
-            runtimePromise??=createExtensionRuntime({rpc,...data.context,onState:state=>postMessage({event:'state',state}),onHistory:revision=>postMessage({event:'history',revision})}).catch(error=>{runtimePromise=null;throw error;});
+            runtimePromise??=createExtensionRuntime({rpc,...data.context,notificationSend:payload=>rpc('notification-send',payload),notificationCheck:payload=>rpc('notification-check',payload),onState:state=>postMessage({event:'state',state}),onHistory:revision=>postMessage({event:'history',revision})}).catch(error=>{runtimePromise=null;throw error;});
             const runtime=await runtimePromise;
             const result=await runtime.command(data.method,data.payload);
             postMessage({id:data.id,result});

@@ -19,7 +19,7 @@ const fields = {
 // Destinations belong to local configuration, never to a model or a web page.
 // A successful HTTP response means provider acceptance, not confirmed delivery.
 export class Notifications {
-    constructor({ env = process.env, fetch: fetcher = fetch, sanitize = value => value } = {}) {
+    constructor({ env = globalThis.process?.env ?? {}, fetch: fetcher = fetch, sanitize = value => value } = {}) {
         this.env = { ...env };
         this.fetch = fetcher;
         this.sanitize = sanitize;
@@ -57,9 +57,15 @@ export class Notifications {
                     : typeof data.id === "string" && data.id.length > 0;
                 return accepted ? { channel: name, accepted: true }
                     : { channel: name, accepted: false, error: "Provider did not acknowledge the notification." };
-            } catch {
+            } catch (error) {
                 // No automatic retries: a timed-out send may already have been accepted.
-                return { channel: name, accepted: false, error: "Notification request failed or timed out; delivery is unknown. Check the provider before retrying." };
+                const timeout = ["TimeoutError", "AbortError"].includes(error?.name);
+                const invalidResponse = error instanceof SyntaxError;
+                return { channel: name, accepted: false,
+                    errorCode: timeout ? "TIMEOUT" : invalidResponse ? "INVALID_RESPONSE" : "NETWORK_ERROR",
+                    error: timeout ? "The notification request timed out. Delivery is unknown; check the receiving app before retrying."
+                        : invalidResponse ? "The provider returned an unreadable response. Delivery is unknown; check the receiving app before retrying."
+                        : "The browser could not read a response from the notification provider. Check extension site access, your network or VPN, and whether the message arrived before retrying. Delivery is unknown." };
             }
         }));
         return { accepted: results.every(result => result.accepted), results };

@@ -441,3 +441,17 @@ test("Telegram test button sends only an explicit saved-channel test and reports
  await ui.dispatch("settings-button");await ui.dispatch("test-telegram");
  assert.match(ui.document.getElementById("notice").textContent,/Telegram accepted the test alert/);
 });
+
+
+test("Telegram connection check asks for host access and does not send a notification",async()=>{
+ const ui=await panel();const send=ui.chrome.runtime.sendMessage;let checked=0,sent=0;
+ ui.chrome.runtime.sendMessage=async message=>{
+  if(message.method==="notification-check"){checked++;return {ok:true,check:{ok:true,message:"Bot and chat verified. No alert was sent."}};}
+  if(message.method==="notification-test")sent++;
+  return send(message);
+ };
+ await ui.dispatch("settings-button");await ui.dispatch("check-telegram");
+ assert.equal(checked,1);assert.equal(sent,0);
+ assert.match(ui.document.getElementById("notice").textContent,/No alert was sent/);
+ assert.ok(ui.calls.some(call=>call.permissionRequest?.origins[0]==="https://api.telegram.org/*"));
+});

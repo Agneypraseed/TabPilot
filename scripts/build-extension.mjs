@@ -15,6 +15,15 @@ const result = await build({
 await mkdir(new URL(".tabpilot/", root), { recursive: true });
 await writeFile(new URL(".tabpilot/extension-build-meta.json", root), JSON.stringify(result.metafile, null, 2));
 
+const notificationBuild = await build({
+    absWorkingDir: fileURLToPath(root), entryPoints: ["extension-notification-network.mjs"],
+    outfile: "vendor/notification-network.js", bundle: true, platform: "browser",
+    format: "iife", target: ["chrome118"], conditions: ["browser"],
+    define: { "process.env.NODE_ENV": '"production"' },
+    supported: { "template-literal": false }, minify: true, metafile: true, logLevel: "info"
+});
+for (const [path, data] of Object.entries(notificationBuild.metafile.inputs)) result.metafile.inputs[path] = data;
+
 // Keep third-party license texts alongside the committed runtime bundle.
 const packages = new Set(Object.keys(result.metafile.inputs).map(path =>
     /^node_modules\/((?:@[^/]+\/)?[^/]+)/.exec(path)?.[1]).filter(Boolean));

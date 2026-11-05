@@ -10,7 +10,7 @@ const token = 'a'.repeat(64);
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 async function until(check) {for(let i=0;i<100;i++){if(check())return;await flush();}assert.fail('Background did not settle');}
 
-function setup({localValues={},jobs=[],unsupported=false}={}) {
+function setup({localValues={},jobs=[],unsupported=false,notificationSend=async()=>({accepted:true,results:[]}),notificationCheck=async()=>({ok:true})}={}) {
  let listener, alarmListener, documentExists=false, created=0;
  const local={...localValues},session={},messages=[],sockets=[],levels=[];
  const area = values => ({
@@ -44,7 +44,7 @@ function setup({localValues={},jobs=[],unsupported=false}={}) {
  };
  if(unsupported){delete chrome.offscreen;delete chrome.runtime.getContexts;}
  mockDebugger(chrome,async()=>({title:'Example',text:'Current page',truncated:false}));
- vm.runInNewContext(backgroundSource,{chrome,URL,crypto:globalThis.crypto,setTimeout,clearTimeout,WebSocket:Socket});
+ vm.runInNewContext(backgroundSource,{chrome,URL,crypto:globalThis.crypto,setTimeout,clearTimeout,WebSocket:Socket,tabPilotSendNotification:notificationSend,tabPilotCheckTelegram:notificationCheck});
  return {local,session,messages,sockets,levels,get created(){return created;},alarm:()=>alarmListener({name:'tabpilot-scheduler'}),
   request(message,sender=extensionPage){return new Promise(resolve=>listener(message,sender,resolve));}
  };
@@ -143,4 +143,18 @@ test('mode changes cannot interrupt active tasks and scheduler alarms only dispa
  assert.equal(worker.local.extensionExecutionMode,'bridge');
  assert.equal((await worker.request({type:'tabpilot:connect',token})).ok,true);
  assert.equal(worker.created,0);
+});
+
+
+test('only the trusted offscreen runtime can request background notification sends and read-only checks',async()=>{
+ const calls=[];const worker=setup({notificationSend:async payload=>{calls.push(['send',payload]);return {accepted:true,results:[{channel:'telegram',accepted:true}]};},notificationCheck:async()=>{calls.push(['check']);return {ok:true};}});
+ const payload={env:{TELEGRAM_BOT_TOKEN:'fixture-token',TABPILOT_TELEGRAM_CHAT_ID:'12'},input:{subject:'Test',message:'Test',channels:['telegram']}};
+ const message={type:'tabpilot:runtime-rpc',operation:'notification-send',payload};
+ assert.equal((await worker.request(message,extensionPage)).ok,false);
+ assert.equal(calls.length,0);
+ const sent=await worker.request(message,offscreenPage);assert.equal(sent.ok,true);assert.equal(sent.data.accepted,true);
+ const check=await worker.request({...message,operation:'notification-check',payload:{env:payload.env}},offscreenPage);assert.equal(check.data.ok,true);
+ assert.deepEqual(calls.map(call=>call[0]),['send','check']);
+ await worker.request({type:'tabpilot:agent',method:'runtime-configure',payload:{executionMode:'bridge'}});
+ assert.equal((await worker.request(message,offscreenPage)).ok,false);assert.equal(calls.length,2);
 });
