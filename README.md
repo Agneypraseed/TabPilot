@@ -18,7 +18,7 @@ Use desktop Chrome 118 or newer. In `chrome://extensions`, enable **Developer mo
 2. Choose a provider and enter its model ID and your own API key. Compatible providers also need their API base URL.
 3. Save settings, choose a web tab, and enter a task.
 
-For Meta, choose **Meta** and model `muse-spark-1.3`. Keys for different providers stay separate. Leave credential fields blank to preserve saved values; use the removal controls to delete them. The settings screen never reveals stored keys or recipient addresses.
+For Meta, choose **Meta** and model `muse-spark-1.3`. Keys for different providers stay separate. Leave credential fields blank to preserve saved values; use the removal controls to delete them. Settings are shared across all tabs and conversations. Saved keys stay masked with a Change control; saved notification destinations remain visible for checking. Starting a new chat does not clear settings.
 
 Credentials last for the browser session by default. **Remember credentials on this device** saves them in extension-local storage, never Chrome sync. That storage is not an encrypted vault. Do not include a shared API key in a distributed extension. Browser execution, tasks, and history stay on your device; page context and screenshots used for inference go to your selected model provider.
 

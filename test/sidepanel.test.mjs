@@ -38,7 +38,7 @@ test("Tasks keeps workers with their parent tab, safely renders prompts, and sub
     assert.equal(payload.allowResearch, false);
     assert.equal($("schedule-prompt").value, "");
 });
-async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "", formatted = false, executionMode = "extension", configuredFields = [] } = {}) {
+async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [], search = "", formatted = false, executionMode = "extension", configuredFields = [], savedValues = {}, rememberCredentials = false } = {}) {
     const window = formatted ? new JSDOM(html).window : parseHTML(html).window;
     const document = window.document;
     // linkedom implements selected options but not HTMLSelectElement.value's setter.
@@ -47,7 +47,7 @@ async function panel({ initialActiveTab = 12, incognito = false, extraTabs = [],
         set(value) { for (const option of this.querySelectorAll("option")) option.toggleAttribute("selected", option.value === String(value)); }
     });
     let runtimeListener;
-    const runtime = { executionMode, configuredFields: [...configuredFields], rememberCredentials: false, compatibleBaseUrl: "" };
+    const runtime = { executionMode, configuredFields: [...configuredFields], rememberCredentials, savedValues, compatibleBaseUrl: "" };
     const activationListeners = [];
     const stored = {}, calls = [], queries = [];
     const agent = { revision: 1, status: "idle", runId: "run-1", events: [], historyAvailable: true, historyRevision: 0, settings: { provider: "meta", model: "fixture", maxTurns: 30, timeoutMs: 300000 }, providers: [{ id: "meta", configured: true }] };
@@ -384,4 +384,40 @@ test("a denied compatible-host permission prevents saving credentials or model s
     await ui.dispatch("settings-form", "submit");
     assert.equal(ui.calls.some(call => call.method === "runtime-configure" || call.method === "settings"), false);
     assert.match($("notice").textContent, /Allow access/);
+});
+
+
+test("saved credentials are visibly summarized and Change edits without revealing the saved key", async () => {
+    const ui = await panel({ configuredFields: ["META_API_KEY", "TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID", "TABPILOT_EMAIL_TO"], savedValues: { TABPILOT_TELEGRAM_CHAT_ID: "12345", TABPILOT_EMAIL_TO: "alerts@example.com" } });
+    const $ = id => ui.document.getElementById(id);
+    await ui.dispatch("settings-button");
+    assert.equal($("provider-key").hidden, true);
+    assert.equal($("provider-key-saved").hidden, false);
+    assert.match($("provider-key-saved-value").textContent, /Saved/);
+    assert.equal($("telegram-token").hidden, true);
+    assert.equal($("telegram-chat-saved-value").textContent, "12345");
+    assert.equal($("email-to-saved-value").textContent, "alerts@example.com");
+    assert.match($("settings-storage-scope").textContent, /New chats and switching tabs keep/);
+    await ui.dispatch("provider-key-change");
+    assert.equal($("provider-key").hidden, false);
+    assert.equal($("provider-key").value, "");
+    assert.equal($("provider-key-saved").hidden, true);
+    $("provider-key").value = "replacement-test-key";
+    await ui.dispatch("settings-form", "submit");
+    assert.equal($("provider-key").value, "");
+    assert.equal($("provider-key").hidden, true);
+    assert.match($("notice").textContent, /all tabs and conversations/);
+    assert.equal($("settings-view").textContent.includes("replacement-test-key"), false);
+});
+
+test("saved settings remain visible after new chat and tab changes and show their storage duration", async () => {
+    const ui = await panel({ configuredFields: ["META_API_KEY", "TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID"], savedValues: { TABPILOT_TELEGRAM_CHAT_ID: "12345" }, rememberCredentials: true });
+    const $ = id => ui.document.getElementById(id);
+    await ui.dispatch("new-chat");
+    await ui.activate({ tabId: 34, windowId: 7 });
+    await ui.dispatch("settings-button");
+    assert.equal($("provider-key-saved").hidden, false);
+    assert.equal($("telegram-chat-saved-value").textContent, "12345");
+    assert.match($("settings-storage-scope").textContent, /Saved on this device/);
+    assert.equal(ui.calls.some(call => call.method === "runtime-configure"), false);
 });

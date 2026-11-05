@@ -61,8 +61,9 @@ export class TaskManager {
         const selected = [...this.records.values()].filter(record => this.visible(record) && record.scope === this.connection.scope && record.tabId === this.selectedTab)
             .sort((a, b) => Number(this.sessions.get(b.id)?.active ?? false) - Number(this.sessions.get(a.id)?.active ?? false) || b.createdAt - a.createdAt)[0];
         const service = selected && this.sessions.get(selected.id);
-        const base = service?.snapshot() ?? this.preferences.snapshot();
-        return { ...base, sessionId: this.sessionId, revision: this.revision,
+        const preferences = this.preferences.snapshot();
+        const base = service?.snapshot() ?? preferences;
+        return { ...base, settings: preferences.settings, providers: preferences.providers, sessionId: this.sessionId, revision: this.revision,
             ...(selected?.status === "paused" && !service?.active ? { status: "needs-review" } : {}),
             selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning, notificationWarning: this.notificationWarning,
             requests: [...this.sessions.values()].flatMap(session => session.snapshot().requests),

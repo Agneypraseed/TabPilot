@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { Usage } from '@openai/agents';
+import { Usage, RunContext } from '@openai/agents';
 import { createExtensionRuntime } from '../extension-runtime.mjs';
 
 function fixture() {
@@ -130,4 +130,30 @@ test('credential writes finish before concurrent task creation can observe a par
  const starting=runtime.command('task-create',{prompt:'Test configuration ordering',tabId:12,mode:'browser',maxStages:1,allowResearch:false});
  await new Promise(resolve=>setTimeout(resolve,10));assert.equal(started,false);
  release();await saving;await starting;await until(()=>!runtime.manager.active);assert.equal(started,true);
+});
+
+
+test('global settings and notification destinations survive a task, new chat, tab switch and runtime reopen',async t=>{
+ const f=fixture();
+ const runtime=await createExtensionRuntime({...f,configure:async()=>({model:{},modelSettings:{},close:async()=>{}}),run:async(_prompt,options)=>{
+  await options.extraTools.find(tool=>tool.name==='complete_task').invoke(new RunContext(),JSON.stringify({summary:'Done',evidence:'Controlled fixture task completed'}));return {answer:'Done',history:[]};
+ }});
+ await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret,TABPILOT_TELEGRAM_CHAT_ID:'12345',TABPILOT_EMAIL_TO:'alerts@example.com'}});
+ await runtime.command('settings',settings);
+ await runtime.command('task-create',{prompt:'Fixture task',tabId:12,mode:'browser',maxStages:1,allowResearch:false});
+ await until(()=>!runtime.manager.active);
+ await runtime.command('settings',{...settings,model:'next-model'});
+ assert.equal(runtime.snapshot().settings.model,'next-model','An old task cannot override current global settings');
+ await runtime.command('clear');
+ await runtime.command('select-tab',{tabId:34});
+ assert.equal(runtime.snapshot().runtime.savedValues.TABPILOT_TELEGRAM_CHAT_ID,'12345');
+ assert.equal(runtime.snapshot().runtime.savedValues.TABPILOT_EMAIL_TO,'alerts@example.com');
+ assert.ok(!JSON.stringify(runtime.snapshot()).includes(secret));
+ await runtime.close();
+ const reopened=await createExtensionRuntime(f);t.after(()=>reopened.close());
+ assert.equal(reopened.snapshot().settings.model,'next-model');
+ assert.ok(reopened.snapshot().runtime.configuredFields.includes('OPENAI_API_KEY'));
+ assert.equal(reopened.snapshot().runtime.savedValues.TABPILOT_TELEGRAM_CHAT_ID,'12345');
+ await reopened.command('runtime-configure',{clearCredentials:['OPENAI_API_KEY']});
+ assert.equal(reopened.snapshot().providers.find(provider=>provider.id==='openai').configured,false);
 });

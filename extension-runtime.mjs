@@ -37,7 +37,7 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
                 return result;
             }})})}
     });
-    const metadata = () => ({executionMode:'extension',configuredFields:credentialNames.filter(key=>!!env[key]),compatibleBaseUrl:env.COMPATIBLE_BASE_URL??'',rememberCredentials});
+    const metadata = () => ({executionMode:'extension',configuredFields:credentialNames.filter(key=>!!env[key]),compatibleBaseUrl:env.COMPATIBLE_BASE_URL??'',savedValues:Object.fromEntries(['TABPILOT_TELEGRAM_CHAT_ID','TABPILOT_EMAIL_FROM','TABPILOT_EMAIL_TO'].filter(name=>!!env[name]).map(name=>[name,env[name]])),rememberCredentials});
     const snapshot = () => ({...manager.snapshot(),executionMode:'extension',runtime:metadata()});
     manager.subscribe(()=>onState(snapshot()));
     manager.subscribeHistory(revision=>onHistory(revision));

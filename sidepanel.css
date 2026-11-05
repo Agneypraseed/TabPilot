@@ -961,3 +961,10 @@ body.settings-open #new-chat {
 #developer-settings > summary { font-size: 14px; }
 #apply-execution-mode { margin-top: 12px; }
 #settings-view input[type="password"], #settings-view input[type="url"] { min-width: 0; }
+
+.shared-settings-note { padding: 12px 14px; margin: 0 0 20px; border: 1px solid #d9e5dc; border-radius: 10px; background: #f5faf6; font-size: 13px; }
+.shared-settings-note .help { margin-bottom: 0; }
+.saved-credential { display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 10px 12px; border: 1px solid #d9e5dc; border-radius: 10px; background: #f5faf6; }
+.saved-credential[hidden] { display: none; }
+.saved-credential-value { min-width: 0; overflow-wrap: anywhere; color: #26583b; font-size: 13px; }
+.saved-credential button { flex-shrink: 0; padding: 7px 12px; }

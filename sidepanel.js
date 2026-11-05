@@ -21,6 +21,7 @@
   let executionMode = "extension";
   let executionModeDirty = false;
   let runtimeSettings = { configuredFields: [] };
+  const credentialEdits = new Set();
   let settingsDirty = false,
     accessBusy = false,
     busy = false,
@@ -444,6 +445,12 @@
     $("developer-bridge").hidden = local;
     $("apply-execution-mode").disabled = active();
     const fields = runtimeSettings.configuredFields || [];
+    $("settings-storage-scope").textContent = executionMode === "bridge"
+      ? "The developer server keeps its own settings. Starting a new chat does not reset them."
+      : runtimeSettings.rememberCredentials
+        ? "Saved on this device, including after restarting Chrome. New chats and switching tabs keep these settings."
+        : "Saved for this browser session. New chats and switching tabs keep these settings. Enable Remember credentials below to keep them after restarting Chrome.";
+    for (const [id, name] of Object.entries(credentialInputs)) renderSavedCredential(id, fields.includes(name), runtimeSettings.savedValues?.[name]);
     $("telegram-status").textContent = ["TELEGRAM_BOT_TOKEN", "TABPILOT_TELEGRAM_CHAT_ID"].every(name => fields.includes(name))
       ? "Telegram settings saved. The bot must have received /start from this chat."
       : "Add a bot token and chat ID. Send /start to your bot first.";
@@ -456,12 +463,28 @@
     const provider = $("provider").value;
     const configured = (runtimeSettings.configuredFields || []).includes(providerKeys[provider]) || agent?.providers?.find(p => p.id === provider)?.configured;
     $("compatible-endpoint").hidden = provider !== "openai-compatible";
+    renderSavedCredential("provider-key", configured);
     $("provider-key").placeholder = configured ? "Key saved · leave blank to keep it" : "Enter your API key";
     $("provider-help").textContent = executionMode === "bridge"
       ? configured ? "This provider’s key is configured on the developer server." : "Add this provider’s key to the server’s .env.local and restart that server."
-      : configured ? "This provider has a key configured. Leave the key field blank to keep it, or enter a replacement." : "Enter your own provider API key above, then save settings. No local server is needed.";
+      : configured ? "API key saved for all tabs and conversations. Use Change to replace it." : "Enter your own provider API key above, then save settings. No local server is needed.";
+  }
+  function renderSavedCredential(id, configured, displayValue) {
+    const saved = configured && !credentialEdits.has(id);
+    $(id).hidden = saved;
+    $(id + "-saved").hidden = !saved;
+    $(id + "-saved-value").textContent = displayValue || "••••••••  Saved";
+  }
+  for (const id of ["provider-key", ...Object.keys(credentialInputs)]) {
+    $(id + "-change").addEventListener("click", () => {
+      credentialEdits.add(id);
+      renderSavedCredential(id, true);
+      $(id).placeholder = "Enter replacement, or leave blank to keep saved value";
+      $(id).focus();
+    });
   }
   function clearCredentialInputs() {
+    credentialEdits.clear();
     $("provider-key").value = "";
     for (const id of Object.keys(credentialInputs)) $(id).value = "";
     for (const id of ["clear-provider-key", "clear-telegram", "clear-email"]) $(id).checked = false;
@@ -883,6 +906,7 @@
     settingsDirty = true;
     $("model").value = defaults[$("provider").value] || "";
     $("provider-key").value = "";
+    credentialEdits.delete("provider-key");
     $("clear-provider-key").checked = false;
     providerHelp();
   });
@@ -926,7 +950,7 @@
       });
       settingsDirty = false;
       fillSettings();
-      notice("Settings saved for the next run.", true);
+      notice("Settings saved for all tabs and conversations.", true);
     } catch (error) {
       notice(error.message);
     }

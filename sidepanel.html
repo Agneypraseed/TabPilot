@@ -253,6 +253,7 @@
     </section>
     <section id="settings-view" hidden>
       <h2>Settings</h2>
+      <div class="shared-settings-note"><strong>Shared across all tabs and conversations</strong><p id="settings-storage-scope" class="help">Starting a new chat does not reset your settings.</p></div>
       <section class="settings-section">
         <h3>Keep TabPilot beside the page</h3>
         <button id="open-side-panel" class="secondary full-width" type="button">
@@ -313,13 +314,14 @@
           <div id="extension-credentials">
             <label for="provider-key">Provider API key</label>
             <input id="provider-key" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Enter your API key" />
+            <div id="provider-key-saved" class="saved-credential" hidden><span id="provider-key-saved-value" class="saved-credential-value"></span><button id="provider-key-change" class="secondary" type="button" aria-label="Change saved provider API key">Change</button></div>
             <label class="check-label"><input id="clear-provider-key" type="checkbox" /> Remove saved key for this provider</label>
             <div id="compatible-endpoint" hidden>
               <label for="compatible-base-url">Compatible API base URL</label>
               <input id="compatible-base-url" type="url" autocomplete="off" spellcheck="false" maxlength="1000" placeholder="https://your-provider.example/v1" />
             </div>
           </div>
-          <p id="provider-help" class="help">Enter your own key. Keys are never shown again or shared with a web page.</p>
+          <p id="provider-help" class="help">Enter your own key. Saved keys stay masked and can be replaced with Change.</p>
         </section>
         <section id="notification-settings" class="settings-section">
           <h3>Telegram and email alerts</h3>
@@ -328,8 +330,10 @@
             <summary>Telegram</summary>
             <label for="telegram-token">Bot token</label>
             <input id="telegram-token" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="Token from @BotFather" />
+            <div id="telegram-token-saved" class="saved-credential" hidden><span id="telegram-token-saved-value" class="saved-credential-value"></span><button id="telegram-token-change" class="secondary" type="button" aria-label="Change saved Telegram bot token">Change</button></div>
             <label for="telegram-chat">Chat ID</label>
             <input id="telegram-chat" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="Numeric chat ID" />
+            <div id="telegram-chat-saved" class="saved-credential" hidden><span id="telegram-chat-saved-value" class="saved-credential-value"></span><button id="telegram-chat-change" class="secondary" type="button" aria-label="Change saved Telegram chat ID">Change</button></div>
             <p id="telegram-status" class="help">Not configured.</p>
             <label class="check-label"><input id="clear-telegram" type="checkbox" /> Remove Telegram settings</label>
           </details>
@@ -337,10 +341,13 @@
             <summary>Email through Resend</summary>
             <label for="resend-key">Resend API key</label>
             <input id="resend-key" type="password" autocomplete="off" spellcheck="false" maxlength="4096" />
+            <div id="resend-key-saved" class="saved-credential" hidden><span id="resend-key-saved-value" class="saved-credential-value"></span><button id="resend-key-change" class="secondary" type="button" aria-label="Change saved Resend API key">Change</button></div>
             <label for="email-from">Sender address</label>
             <input id="email-from" type="text" autocomplete="off" spellcheck="false" maxlength="500" placeholder="TabPilot &lt;alerts@your-domain.example&gt;" />
+            <div id="email-from-saved" class="saved-credential" hidden><span id="email-from-saved-value" class="saved-credential-value"></span><button id="email-from-change" class="secondary" type="button" aria-label="Change saved sender address">Change</button></div>
             <label for="email-to">Recipient address</label>
             <input id="email-to" type="email" autocomplete="off" spellcheck="false" maxlength="500" />
+            <div id="email-to-saved" class="saved-credential" hidden><span id="email-to-saved-value" class="saved-credential-value"></span><button id="email-to-change" class="secondary" type="button" aria-label="Change saved recipient address">Change</button></div>
             <p id="email-status" class="help">Not configured.</p>
             <label class="check-label"><input id="clear-email" type="checkbox" /> Remove email settings</label>
           </details>
@@ -349,7 +356,7 @@
           <h3>Credential storage</h3>
           <label class="check-label"><input id="remember-credentials" type="checkbox" /> Remember credentials on this device</label>
           <p class="help">By default, credentials last for this browser session. Remembering saves them in this extension’s local storage, never Chrome sync. Local storage is not an encrypted vault. Keys are sent only to their selected API provider; page text and screenshots used by the agent go to that provider.</p>
-          <p class="help">Leave credential fields blank to keep existing values. Use the removal options to clear them. Settings never display stored keys, tokens, or recipient addresses. Developer server mode uses its own .env.local instead.</p>
+          <p class="help">Leave credential fields blank to keep existing values. Use the removal options to clear them. Keys and tokens stay masked. Saved destinations are shown so you can check them. Developer server mode uses its own .env.local instead.</p>
         </section>
         <details class="settings-section advanced-settings">
           <summary>Advanced settings</summary>
