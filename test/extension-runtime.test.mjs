@@ -184,6 +184,46 @@ test('automatic intervention alerts expose Telegram acceptance or rejection with
  }
 });
 
+test('a direct private Telegram reply resolves only the matching live approval',async t=>{
+ const f=fixture();
+ const chat={id:12345,type:'private'};
+ const from={id:12345,is_bot:false};
+ const reply=(update_id, overrides={})=>({update_id,message:{chat,from,text:'OK',reply_to_message:{message_id:10},...overrides}});
+ let updates=[reply(1,{chat:{id:12345,type:'group'}}),reply(2,{from:{id:42,is_bot:false}}),
+     reply(3,{reply_to_message:undefined}),reply(4,{reply_to_message:{message_id:9}}),reply(5,{text:'OK to do something else'})];
+ const offsets=[];
+ const runtime=await createExtensionRuntime({...f,notificationFetch:async(url,options)=>{
+   const body=JSON.parse(options.body);
+   if(url.endsWith('/getUpdates')) {
+    offsets.push(body.offset);
+    return Response.json({ok:true,result:updates});
+   }
+   if(body.text.includes('Approve the fixture action?')) {
+    assert.equal(body.reply_markup.force_reply,true);
+    return Response.json({ok:true,result:{message_id:10,chat}});
+   }
+   return Response.json({ok:true,result:{message_id:11,chat}});
+ },configure:async()=>({model:{},modelSettings:{},close:async()=>{}}),run:async(_prompt,options)=>{
+   const response=await options.requestHuman({kind:'approval',question:'Approve the fixture action?'});
+   assert.equal(response.decision,'approve');
+   await options.extraTools.find(tool=>tool.name==='complete_task').invoke(new RunContext(),JSON.stringify({summary:'Approved',evidence:'Fixture acted after approval'}));
+   return {answer:'Done',history:[]};
+ }});t.after(()=>runtime.close());
+ clearInterval(runtime.manager.timer);
+ await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret,TELEGRAM_BOT_TOKEN:'123456:test-token-fixture',TABPILOT_TELEGRAM_CHAT_ID:'12345'}});
+ await runtime.command('start',{prompt:'Ask before acting',tabId:12,mode:'browser',maxStages:1,allowResearch:false});
+ await until(()=>runtime.snapshot().notificationDeliveries.some(item=>item.results[0]?.accepted));
+ await runtime.manager.pollTelegram();
+ assert.equal(runtime.snapshot().requests.length,1);
+ updates=[reply(6,{text:' ok '})];
+ runtime.manager.telegramPollAfter=0;
+ await runtime.manager.pollTelegram();
+ await until(()=>!runtime.manager.active);
+ assert.deepEqual(offsets,[undefined,6]);
+ assert.equal(runtime.snapshot().requests.length,0);
+ assert.equal(runtime.snapshot().jobs[0].status,'completed');
+});
+
 test('Telegram settings test reports invalid configuration without a network send',async t=>{
  const f=fixture();const runtime=await createExtensionRuntime({...f,notificationFetch:async()=>assert.fail('Invalid settings cannot send')});t.after(()=>runtime.close());
  await runtime.command('runtime-configure',{credentials:{TELEGRAM_BOT_TOKEN:'bot123:wrong-format',TABPILOT_TELEGRAM_CHAT_ID:'@wrong-destination'}});

@@ -114,6 +114,16 @@ test("click, fill, key, and scroll use CDP input and return observed state", asy
     await assert.rejects(browser.action(12, "click", { ref: "old:e1" }), /STALE_REF/);
 });
 
+test("held browser key sends keyDown and releases only after the hold", async () => {
+    const { browser, calls } = controllerFixture();
+    const start = performance.now();
+    await browser.action(12, "press", { key: "w", holdMs: 40 });
+    const events = calls.filter(call => call.method === "Input.dispatchKeyEvent");
+    assert.deepEqual(events.map(({ params }) => [params.type, params.code]), [["keyDown", "KeyW"], ["keyUp", "KeyW"]]);
+    assert.ok(performance.now() - start >= 35);
+    await assert.rejects(browser.action(12, "press", { key: "w", holdMs: 2001 }), /Hold duration/);
+});
+
 test("pointer motion uses one page-local animation and hides before screenshots", async () => {
     const { browser, calls } = controllerFixture();
     await browser.setAccess(12, true);

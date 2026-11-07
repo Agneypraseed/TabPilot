@@ -210,8 +210,9 @@ class TabPilotBrowser {
         }
     }
 
-    async key(tabId, combination) {
+    async key(tabId, combination, holdMs) {
         if (typeof combination !== "string" || combination.length > 80) throw new Error("Invalid key.");
+        if (holdMs !== undefined && (!Number.isInteger(holdMs) || holdMs < 1 || holdMs > 2000)) throw new Error("Hold duration must be 1–2000 milliseconds.");
         const parts = combination.split("+");
         let key = parts.pop(), modifiers = 0;
         for (const part of parts) {
@@ -230,7 +231,11 @@ class TabPilotBrowser {
         const params = { key, code, windowsVirtualKeyCode: virtualKey, modifiers };
         const text = !(modifiers & (2 | 4)) ? (key === "Enter" ? "\r" : key.length === 1 ? key : undefined) : undefined;
         await this.command(tabId, "Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(text ? { text } : {}) });
-        await this.command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
+        try {
+            if (holdMs) await new Promise(resolve => setTimeout(resolve, holdMs));
+        } finally {
+            await this.command(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
+        }
     }
 
     httpUrl(value) {
@@ -420,7 +425,7 @@ class TabPilotBrowser {
                     const focus = await this.evaluate(tabId, "focus", { ref: params.ref });
                     if (!focus?.focused) throw new Error("Could not focus the target.");
                 }
-                await this.key(tabId, params.key);
+                await this.key(tabId, params.key, params.holdMs);
             } else if (method === "scroll") {
                 const deltaY = params.deltaY ?? 600, deltaX = params.deltaX ?? 0;
                 if (![deltaX, deltaY].every(v => Number.isFinite(v) && Math.abs(v) <= 10000)) throw new Error("Scroll deltas must be within 10000 pixels.");

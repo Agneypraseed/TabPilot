@@ -23,6 +23,7 @@ export class TaskManager {
         this.notifications = notifications;
         this.pendingNotifications = new Set();
         this.notificationDeliveries = new Map();
+        this.telegramApprovals = new Map();
         this.sessionId = randomUUID();
         this.traceStore = serviceOptions.traceStore;
         this.listeners = new Set();
@@ -70,11 +71,12 @@ export class TaskManager {
             selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning, notificationWarning: this.notificationWarning, notificationDeliveries: [...this.notificationDeliveries.values()],
             requests: [...this.sessions.values()].flatMap(session => session.snapshot().requests),
             jobs: [...this.records.values()].filter(record => this.visible(record)).map(({ checkpoint, ...record }) => ({ ...record,
+                runId: this.sessions.get(record.id)?.state.runId ?? record.runId,
                 activity: this.sessions.get(record.id)?.state.events.findLast(event => event.kind === "tool" || event.kind === "status")?.text,
                 needsRebind: record.scope !== this.connection.scope })) };
     }
     emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
-    notify(input, context = {}) {
+    notify(input, context = {}, request) {
         if (!this.notifications) return;
         const id = context.requestId ?? context.taskId ?? randomUUID();
         const update = results => {
@@ -92,8 +94,15 @@ export class TaskManager {
                 throw new Error('Invalid notification settings.');
             }
             update(channels.map(channel => ({ channel, status: 'sending' })));
-            const result = await this.notifications.send(input);
-            update(result.results ?? channels.map(channel => ({ channel, accepted: result.accepted })));
+            const telegramApproval = request?.kind === "approval" && request.question.trim().length <= 900 &&
+                (request.detail?.trim().length ?? 0) <= 1400 && this.notifications.telegramApprovals;
+            const result = await this.notifications.send(input, { telegramApproval });
+            const results = result.results ?? channels.map(channel => ({ channel, accepted: result.accepted }));
+            const messageId = results.find(item => item.channel === "telegram" && item.accepted)?.messageId;
+            if (telegramApproval && Number.isSafeInteger(messageId) && this.connection?.scope === request.scope) {
+                this.telegramApprovals.set(messageId, { id: request.id, runId: request.runId, scope: request.scope });
+            }
+            update(results.map(({ messageId: _, ...delivery }) => delivery));
             if (!result.accepted) throw new Error('Notification was not accepted.');
         }).catch(() => {
             const previous = this.notificationDeliveries.get(id);
@@ -105,6 +114,37 @@ export class TaskManager {
         });
         this.pendingNotifications.add(pending);
         void pending.finally(() => this.pendingNotifications.delete(pending));
+    }
+    async pollTelegram() {
+        const connection = this.connection;
+        const live = new Set([...this.sessions.values()].flatMap(session => session.humanRequests.list())
+            .filter(request => request.scope === connection.scope).map(request => request.id));
+        for (const [messageId, approval] of this.telegramApprovals) {
+            if (!live.has(approval.id)) this.telegramApprovals.delete(messageId);
+        }
+        if (!this.telegramApprovals.size || this.pollingTelegram || this.now() < (this.telegramPollAfter ?? 0)) return;
+        this.pollingTelegram = true;
+        this.telegramPollAfter = this.now() + 2000;
+        try {
+            const env = this.notifications.env;
+            // Start from unacknowledged updates. Only a reply to a currently
+            // pending alert can do anything, even if Telegram redelivers it.
+            const result = await this.notifications.telegramReplies(this.telegramOffset);
+            await Promise.allSettled([...this.pendingNotifications]);
+            if (connection !== this.connection || env !== this.notifications.env) return;
+            this.telegramOffset = result.offset;
+            for (const { messageId, decision } of result.replies) {
+                if (connection !== this.connection) break;
+                const approval = this.telegramApprovals.get(messageId);
+                if (!approval) continue;
+                this.telegramApprovals.delete(messageId);
+                await this.command("human-response", { ...approval, decision }).catch(() => {
+                    // A local response, expiry, or stop may have won the race.
+                });
+            }
+        } catch {
+            this.telegramPollAfter = this.now() + 10000;
+        } finally { this.pollingTelegram = false; }
     }
     async save(record) {
         record.updatedAt = this.now();
@@ -122,6 +162,8 @@ export class TaskManager {
     }
     disconnect() {
         this.connection = null;
+        this.telegramApprovals.clear();
+        this.telegramOffset = undefined;
         for (const session of this.sessions.values()) session.disconnect();
         this.emit();
     }
@@ -197,6 +239,7 @@ export class TaskManager {
     }
     async tick() {
         await this.ready;
+        if (this.connection && this.telegramApprovals.size) void this.pollTelegram();
         if (this.ticking || !this.connection) return;
         this.ticking = true;
         const connection = this.connection;
@@ -251,7 +294,7 @@ export class TaskManager {
             for (const request of state.requests ?? []) {
                 if (notifiedRequests.has(request.id)) continue;
                 notifiedRequests.add(request.id);
-                this.notify(taskRequestAlert(record, request), { requestId: request.id, taskId: record.id });
+                this.notify(taskRequestAlert(record, request), { requestId: request.id, taskId: record.id }, request);
             }
             record.status = ["needs-input", "waiting-for-worker"].includes(state.status) ? state.status : ["paused", "pausing"].includes(state.status) ? "paused" : "running";
             void this.save(record).catch(error => { this.schedulerWarning = error.message; });

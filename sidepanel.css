@@ -77,6 +77,11 @@
 .tasks-view h2 { font-size: 19px; line-height: 1.3; margin-bottom: 5px; }
 #tasks-summary { color: var(--muted); margin: 14px 0 8px; font-size: 12px; }
 .task-row { padding: 15px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.specialist-progress { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+.specialist-progress h3 { font-size: 13px; margin: 0 0 6px; }
+.specialist-progress details { padding: 6px 0; }
+.specialist-progress summary { cursor: pointer; }
+.specialist-progress p { margin: 8px 0; white-space: pre-wrap; }
 .task-heading { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .task-heading strong { font-size: 13px; line-height: 1.5; min-width: 0; }
 .task-status { color: var(--accent-text); background: var(--selected); border-radius: 6px; padding: 2px 7px; font-size: 10px; flex-shrink: 0; max-width: 43%; text-align: center; }

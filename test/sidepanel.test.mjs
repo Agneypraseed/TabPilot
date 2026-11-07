@@ -10,6 +10,26 @@ const source = (await readFile(new URL("../tab-access.js", import.meta.url), "ut
 const tasksSource = await readFile(new URL("../task-view.js", import.meta.url), "utf8");
 const markdownSource = (await Promise.all(["vendor/marked.js", "vendor/purify.js", "markdown.js"].map(path => readFile(new URL(`../${path}`, import.meta.url), "utf8")))).join("\n");
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test("parent chat shows live specialist updates and opens the child trace without selecting its tab", async () => {
+    const ui = await panel({ formatted: true });
+    const section = ui.document.getElementById("specialist-progress");
+    const child = { id: "child", parentTaskId: "root", tabId: 34, prompt: "Read the source", status: "running", activity: "browser_snapshot", runId: "child-run" };
+    ui.receive({ ...ui.agent, revision: 2, taskId: "root", jobs: [child, { ...child, id: "other", parentTaskId: "unrelated", prompt: "Unrelated worker" }] });
+    assert.equal(section.hidden, false);
+    assert.match(section.textContent, /Working · Read the source.*Reading the page/);
+    assert.doesNotMatch(section.textContent, /Unrelated worker/);
+    section.querySelector("details").open = true;
+    ui.receive({ ...ui.agent, revision: 3, taskId: "root", jobs: [{ ...child, status: "completed", summary: "Found evidence" }] });
+    assert.equal(section.querySelector("details").open, true);
+    assert.match(section.textContent, /Completed · Read the source.*Found evidence/);
+    section.querySelector("button").click();
+    await flush();
+    assert.equal(ui.calls.find(call => call.method === "history-events").payload.tabId, 34);
+    assert.equal(ui.calls.find(call => call.method === "history-events").payload.runId, "child-run");
+    assert.ok(!ui.calls.some(call => call.method === "select-tab" && call.payload.tabId === 34));
+    await ui.dispatch("history-back");
+    assert.equal(ui.document.getElementById("conversation").hidden, false);
+});
 test("Tasks keeps workers with their parent tab, safely renders prompts, and submits schedule controls", async () => {
     const ui = await panel(), $ = id => ui.document.getElementById(id);
     Object.assign(ui.agent, { jobs: [

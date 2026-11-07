@@ -80,7 +80,13 @@ Task checkpoints, History and images use the browser’s IndexedDB storage. Earl
 
 Permission alerts lead with the proposed action and its context. When available, this includes the page, visible recipient and message subject; full message bodies and task prompts are not copied automatically. Internal request IDs stay in TabPilot.
 
-Alerts report pending requests and verified coordinator completion; repeating tasks notify for each successful occurrence. They contain task summaries or help questions and relevant approval details. Notifications leave your device for Telegram or Resend. They do not include a screenshot or full task history, and cannot approve actions or resume a task. Respond in TabPilot.
+Alerts report pending requests and verified coordinator completion; repeating tasks notify for each successful occurrence. They contain task summaries or help questions and relevant approval details. Notifications leave your device for Telegram or Resend. They do not include a screenshot or full task history.
+
+In a private chat with your bot, an approval alert that offers a reply accepts **OK** to approve or **Deny** to pause. Use Telegram's Reply action on that specific alert while the request is still pending. Keep Chrome and the TabPilot runtime running. Use a dedicated bot: TabPilot reads replies with [getUpdates](https://core.telegram.org/bots/api#getupdates), which cannot run alongside a webhook or reliably share an update queue with another poller. Group, channel, and email alerts, information requests, and browser handoffs still use the controls in TabPilot.
+
+The agent can send keyboard input to an enabled browser tab. For a game, ask it to focus the game and tap or briefly hold a key, for example “hold ArrowRight for 500 ms, then take a screenshot.” Each hold is capped at two seconds. This works for games that respond to ordinary browser keyboard events; the agent acts one tool call at a time, so it is better suited to deliberate movement than fast reactions.
+
+Delegated research runs keep their own browser history. Open **Research specialists** in the parent chat to see each worker's status, latest activity or result, and a link to its trace.
 
 Provider acceptance does not prove delivery. Sends time out after 10 seconds, do not block the agent, and are never retried automatically because an uncertain send may already have arrived. Failures appear in the Tasks summary without changing the task result. Alerts are best effort and are not replayed after a runtime restart.
 

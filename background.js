@@ -172,8 +172,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const {operation,payload={}}=message;
         const execute=async()=>{
-            if(operation==='notification-send'||operation==='notification-check') {
+            if(['notification-send','notification-check','notification-poll'].includes(operation)) {
                 if((await getExecutionMode())!=='extension')throw new Error('Extension notifications are disabled in developer-server mode.');
+                if(operation==='notification-poll')return globalThis.tabPilotPollTelegram(payload);
                 return operation==='notification-check'?globalThis.tabPilotCheckTelegram(payload):globalThis.tabPilotSendNotification(payload);
             }
             if(operation==='browser') {

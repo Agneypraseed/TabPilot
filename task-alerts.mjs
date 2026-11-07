@@ -5,6 +5,6 @@ export function taskRequestAlert(record, request) {
     const parts = [request.question.trim().slice(0,900)];
     if(detail) parts.push(detail.slice(0,1400));
     else if(record.tabTitle) parts.push('Task tab: '+record.tabTitle.slice(0,180));
-    parts.push('Open TabPilot to review and respond. This message does not approve any action.');
+    parts.push('Open TabPilot to review or respond in the browser.');
     return {subject:request.kind==='approval'?'TabPilot needs your permission':'TabPilot needs your input',message:parts.join('\n\n')};
 }

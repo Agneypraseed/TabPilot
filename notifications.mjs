@@ -39,7 +39,38 @@ export class Notifications {
             return [name, { configured: !missing.length && !invalid, missing, invalid }];
         }));
     }
-    async send(input) {
+    get telegramApprovals() {
+        return this.status().telegram.configured && /^[1-9]\d*$/.test(this.env.TABPILOT_TELEGRAM_CHAT_ID);
+    }
+    async telegramReplies(offset) {
+        if (!this.telegramApprovals) return { offset, replies: [] };
+        const chat = this.env.TABPILOT_TELEGRAM_CHAT_ID;
+        const response = await this.fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/getUpdates`, {
+            method: "POST", redirect: "error", credentials: "omit", signal: AbortSignal.timeout(8000),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ offset, allowed_updates: ["message"], timeout: 0 })
+        });
+        if (!response.ok) {
+            await response.body?.cancel();
+            throw new Error("Telegram could not check for approval replies.");
+        }
+        const data = await response.json();
+        if (!data.ok || !Array.isArray(data.result)) throw new Error("Invalid Telegram updates.");
+        const replies = [];
+        for (const update of data.result) {
+            if (!Number.isSafeInteger(update?.update_id)) continue;
+            offset = Math.max(offset ?? 0, update.update_id + 1);
+            const message = update.message;
+            if (message?.chat?.type !== "private" || String(message.chat.id) !== chat ||
+                String(message.from?.id) !== chat || message.from?.is_bot !== false) continue;
+            const messageId = message.reply_to_message?.message_id;
+            const text = typeof message.text === "string" && message.text.trim().toLowerCase();
+            if (!Number.isSafeInteger(messageId) || !["ok", "deny"].includes(text)) continue;
+            replies.push({ messageId, decision: text === "ok" ? "approve" : "deny" });
+        }
+        return { offset, replies };
+    }
+    async send(input, { telegramApproval = false } = {}) {
         const { subject, message, channels } = notificationInputSchema.parse(input);
         const status = this.status();
         const selected = [...new Set(channels ?? Object.keys(status).filter(name => status[name].configured))];
@@ -48,7 +79,8 @@ export class Notifications {
         const results = await Promise.all(selected.map(async name => {
             if (!status[name].configured) return { channel: name, accepted: false, error: "Channel is not configured. Check notifications_status." };
             try {
-                const response = await this.deliver(name, cleaned);
+                const reply = name === "telegram" && telegramApproval && this.telegramApprovals;
+                const response = await this.deliver(name, cleaned, reply);
                 // Do not echo provider bodies: they may contain credentials or recipients.
                 if (!response.ok) {
                     await response.body?.cancel();
@@ -57,7 +89,8 @@ export class Notifications {
                 const data = await response.json();
                 const accepted = name === "telegram" ? data.ok === true && Number.isSafeInteger(data.result?.message_id)
                     : typeof data.id === "string" && data.id.length > 0;
-                return accepted ? { channel: name, accepted: true }
+                return accepted ? { channel: name, accepted: true, ...(reply && data.result.chat?.type === "private" &&
+                    String(data.result.chat.id) === this.env.TABPILOT_TELEGRAM_CHAT_ID ? { messageId: data.result.message_id } : {}) }
                     : { channel: name, accepted: false, error: "Provider did not acknowledge the notification." };
             } catch (error) {
                 // No automatic retries: a timed-out send may already have been accepted.
@@ -72,7 +105,7 @@ export class Notifications {
         }));
         return { accepted: results.every(result => result.accepted), results };
     }
-    deliver(name, { subject, message }) {
+    deliver(name, { subject, message }, reply) {
         const env = this.env;
         const common = { method: "POST", redirect: "error", signal: AbortSignal.timeout(10000) };
         if (name === "email") return this.fetch("https://api.resend.com/emails", {
@@ -81,7 +114,9 @@ export class Notifications {
         });
         return this.fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             ...common, headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: env.TABPILOT_TELEGRAM_CHAT_ID, text: `${subject}\n\n${message}`,
+            body: JSON.stringify({ chat_id: env.TABPILOT_TELEGRAM_CHAT_ID,
+                text: `${subject}\n\n${message}${reply ? "\n\nReply directly to this alert with OK to approve or Deny to pause this task." : ""}`,
+                ...(reply ? { reply_markup: { force_reply: true, input_field_placeholder: "OK or Deny" } } : {}),
                 link_preview_options: { is_disabled: true } })
         });
     }

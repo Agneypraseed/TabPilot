@@ -29,6 +29,7 @@
     rendered = "";
   let workspaceView = "agent",
     historyRun = null,
+    historyWorker = null,
     historyTab = null,
     historyNext = null,
     historyBusy = false,
@@ -251,6 +252,7 @@
     }
   }
   function resetHistory() {
+    historyWorker = null;
     historyTab = selected?.id;
     historyRun = null;
     historyNext = null;
@@ -344,7 +346,7 @@
             runId,
             artifactId: artifact.artifactId,
           });
-          if (selected?.id !== tabId || historyRun?.runId !== runId) return;
+          if ((historyWorker?.tabId ?? selected?.id) !== tabId || historyRun?.runId !== runId) return;
           const image = response.history;
           $("large-screenshot").src =
             `data:${image.mimeType};base64,${image.data}`;
@@ -360,7 +362,7 @@
     return row;
   }
   async function refreshHistory(append = false) {
-    $("history-tab-label").textContent = selected?.title || "Choose a tab";
+    $("history-tab-label").textContent = historyWorker ? "Research specialist" : selected?.title || "Choose a tab";
     if (!connected || !selected || !agent?.historyAvailable) {
       $("history-status").textContent = !connected
         ? executionMode === "bridge" ? "Connect the developer server to view its History." : "Starting extension History…"
@@ -375,7 +377,7 @@
     }
     historyBusy = true;
     $("history-more").disabled = true;
-    const tabId = selected.id,
+    const tabId = historyWorker?.tabId ?? selected.id,
       runId = historyRun?.runId;
     const offset = append ? historyNext : 0;
     $("history-status").textContent = "Loading history…";
@@ -385,7 +387,7 @@
         { tabId, ...(runId ? { runId } : {}), offset: offset || 0 },
       );
       if (
-        selected?.id !== tabId ||
+        (historyWorker?.tabId ?? selected?.id) !== tabId ||
         historyRun?.runId !== runId ||
         workspaceView !== "history"
       )
@@ -409,7 +411,7 @@
             ? "Runs for this tab, newest first."
             : "No activity recorded for this tab yet.");
     } catch (error) {
-      if (selected?.id === tabId)
+      if ((historyWorker?.tabId ?? selected?.id) === tabId && historyRun?.runId === runId)
         $("history-status").textContent = error.message;
     } finally {
       historyBusy = false;
@@ -730,7 +732,50 @@
     time.textContent = new Date(event.time).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
     row.append(content,time);
   }
+  let renderedSpecialists = "";
+  function renderSpecialists() {
+    const section = $("specialist-progress");
+    const workers = agent?.taskId ? (agent.jobs ?? []).filter(job => job.parentTaskId === agent.taskId && !job.needsRebind) : [];
+    const signature = JSON.stringify(workers.map(({ id, prompt, status, activity, summary, runId }) => [id, prompt, status, activity, summary, runId, agent.historyAvailable]));
+    if (signature === renderedSpecialists) return;
+    renderedSpecialists = signature;
+    const open = new Set([...section.querySelectorAll("details[open]")].map(row => row.dataset.taskId));
+    section.replaceChildren();
+    section.hidden = !workers.length;
+    if (!workers.length) return;
+    const heading = document.createElement("h3");
+    heading.textContent = "Research specialists";
+    section.append(heading);
+    const statuses = { "needs-input": "Needs your input", "waiting-for-tab": "Waiting for tab", running: "Working",
+      completed: "Completed", failed: "Failed", paused: "Paused", cancelled: "Cancelled", interrupted: "Interrupted",
+      queued: "Queued", continuing: "Continuing" };
+    for (const worker of workers) {
+      const row = document.createElement("details");
+      row.dataset.taskId = worker.id;
+      row.open = open.has(worker.id);
+      const title = document.createElement("summary");
+      title.textContent = `${statuses[worker.status] ?? worker.status} · ${worker.prompt.slice(0, 100)}`;
+      const progress = document.createElement("p");
+      progress.textContent = worker.summary || labels[worker.activity] || worker.activity || "Waiting for the first update.";
+      row.append(title, progress);
+      if (worker.runId && agent.historyAvailable) {
+        const trace = document.createElement("button");
+        trace.type = "button";
+        trace.className = "secondary";
+        trace.textContent = "View trace";
+        trace.addEventListener("click", () => {
+          resetHistory();
+          historyWorker = worker;
+          historyRun = { runId: worker.runId, task: worker.prompt, status: worker.status };
+          showWorkspaceView("history");
+        });
+        row.append(trace);
+      }
+      section.append(row);
+    }
+  }
   function renderMessages() {
+    renderSpecialists();
     const events = agent?.events || [];
     const signature = events.map((e) => e.id).join();
     if (signature !== rendered) {
@@ -1108,12 +1153,18 @@
   });
   $("agent-tab").addEventListener("click", () => showWorkspaceView("agent"));
   $("tasks-tab").addEventListener("click", () => showWorkspaceView("tasks"));
-  $("history-tab").addEventListener("click", () =>
-    showWorkspaceView("history"),
-  );
+  $("history-tab").addEventListener("click", () => {
+    if (historyWorker) resetHistory();
+    showWorkspaceView("history");
+  });
   $("refresh-history").addEventListener("click", () => refreshHistory());
   $("history-more").addEventListener("click", () => refreshHistory(true));
   $("history-back").addEventListener("click", () => {
+    if (historyWorker) {
+      resetHistory();
+      showWorkspaceView("agent");
+      return;
+    }
     historyRun = null;
     historyNext = null;
     refreshHistory();
