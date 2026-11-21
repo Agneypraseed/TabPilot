@@ -8,7 +8,7 @@ TabPilot lets a tool-capable AI work inside your existing Chrome session. By def
 
 The agent reads page text and controls, navigates and interacts with websites, and uses screenshots and pointer actions when visual context helps. It stays scoped to its selected tab and asks for approval, missing information, or a browser handoff when needed. You can pause, resume, stop, or revoke tab access. Declining a request pauses its task and related specialists for review; it does not automatically retry the denied action or start another stage. Research specialists, scheduled tasks, download tracking, attention alerts, and per-tab history support longer workflows.
 
-An optional developer server exposes the browser to external CLI and Model Context Protocol (MCP) clients and supports downloads to an absolute local folder. Extension and developer server modes keep separate settings and data. Supported providers include OpenAI, Meta, Gemini, Claude, and OpenAI-compatible APIs. Meta's Muse Spark model is `muse-spark-1.3`.
+An optional developer server exposes the browser to external CLI and Model Context Protocol (MCP) clients and supports downloads to an absolute local folder. Extension and developer server modes keep separate settings and data. Supported providers include OpenAI, Meta, Gemini, Claude, and OpenAI-compatible APIs. 
 
 ## Start with the extension
 
@@ -19,10 +19,6 @@ Use desktop Chrome 118 or newer. In `chrome://extensions`, enable **Developer mo
 3. Save settings, choose a web tab, and enter a task.
 
 Choose **Settings → Appearance → Light, Dark, or System** to change the interface. System follows your device’s appearance. Your choice saves immediately on this device, updates open panels, and stays across tabs, new chats, and browser restarts.
-
-For Meta, choose **Meta** and model `muse-spark-1.3`. Keys for different providers stay separate. Leave credential fields blank to preserve saved values; use the removal controls to delete them. Settings are shared across all tabs and conversations. Saved keys stay masked with a Change control; saved notification destinations remain visible for checking. Starting a new chat does not clear settings.
-
-Credentials last for the browser session by default. **Remember credentials on this device** saves them in extension-local storage, never Chrome sync. That storage is not an encrypted vault. Do not include a shared API key in a distributed extension. Browser execution, tasks, and history stay on your device; page context and screenshots used for inference go to your selected model provider.
 
 Web tabs have access by default. Revoke individual tabs under **Settings → Tab access**. Browser-protected pages and the Chrome Web Store are unavailable. CAPTCHA challenges, logins, and native dialogs can require a user handoff.
 
