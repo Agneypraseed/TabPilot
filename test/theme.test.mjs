@@ -64,14 +64,14 @@ test("system default follows live device changes; explicit preference stays fixe
 test("appearance persists and synchronizes all open panels independently of a chat", async () => {
   const storage = hub();
   const a = await panel(storage), b = await panel(storage);
-  await a.click("dark");
-  assert.equal(storage.data[key], "dark");
-  assert.equal(b.root.dataset.theme, "dark");
+  await a.click("green");
+  assert.equal(storage.data[key], "green");
+  assert.equal(b.root.dataset.theme, "green");
   // A chat change has no appearance handler or dependency on the agent service.
   a.w.document.getElementById("new-chat").click();
-  assert.equal(a.root.dataset.theme, "dark");
+  assert.equal(a.root.dataset.theme, "green");
   const reopened = await panel(storage);
-  assert.equal(reopened.root.dataset.theme, "dark");
+  assert.equal(reopened.root.dataset.theme, "green");
   assert.match(a.status(), /saved across all tabs/);
   storage.emit(undefined);
   assert.equal(a.root.dataset.themePreference, "system");

@@ -1,11 +1,12 @@
 // Local task controls; all model execution and persistence live in the bridge.
 class TabPilotTaskView {
-    constructor({ document, command, selected, notice, viewAgent, mode }) {
+    constructor({ document, command, selected, notice, viewAgent, viewTrace, mode }) {
         this.document = document;
         this.command = command;
         this.selected = selected;
         this.notice = notice;
         this.viewAgent = viewAgent;
+        this.viewTrace = viewTrace;
         this.mode = mode;
         this.$ = id => document.getElementById(id);
         this.$("schedule-form").addEventListener("submit", event => void this.schedule(event));
@@ -48,7 +49,7 @@ class TabPilotTaskView {
         const article = this.element("article", undefined, `task-row${child ? " task-worker" : ""}`);
         const heading = this.element("div", undefined, "task-heading");
         heading.append(this.element("strong", job.prompt.split("\n")[0]));
-        const status = job.needsRebind && !["completed", "cancelled"].includes(job.status) ? "Choose a tab" : {
+        const status = job.resumedAs ? "Continued" : job.needsRebind && !["completed", "cancelled", "interrupted", "failed", "paused"].includes(job.status) ? "Choose a tab" : {
             running: "Working", "waiting-for-worker": "Waiting for specialists", "needs-input": "Needs help",
             scheduled: "Scheduled", queued: "Queued", "waiting-for-tab": "Enable tab", completed: "Completed",
             interrupted: "Interrupted", failed: "Failed", paused: "Review to continue", cancelled: "Cancelled", continuing: "Continuing"
@@ -61,10 +62,11 @@ class TabPilotTaskView {
         if (activity) article.append(this.element("p", activity.replace(/^browser_/, "").replaceAll("_", " "), "task-activity"));
         const actions = this.element("div", undefined, "task-actions");
         if (!job.needsRebind && !["queued", "scheduled", "waiting-for-tab"].includes(job.status)) this.action(actions, child ? "View" : "View agent", () => this.viewAgent(job));
-        if (job.needsRebind && !["completed", "cancelled"].includes(job.status) || ["interrupted", "failed", "paused"].includes(job.status))
+        if (job.runId) this.action(actions, "View trace", () => this.viewTrace(job));
+        if (!child && !job.executing && !job.resumedAs && (job.needsRebind && !["completed", "cancelled"].includes(job.status) || ["interrupted", "failed", "paused"].includes(job.status)))
             this.action(actions, job.needsRebind ? "Use selected tab" : "Review and resume", () => {
                 const tab = this.selected();
-                if (!tab) throw new Error("Choose a tab above first.");
+                if (!tab?.enabled) throw new Error("Choose a tab with access enabled.");
                 return this.command("task-resume", { taskId: job.id, tabId: tab.id });
             });
         if (!child && !["completed", "failed", "cancelled", "interrupted"].includes(job.status))

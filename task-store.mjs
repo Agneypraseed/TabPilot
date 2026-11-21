@@ -87,7 +87,7 @@ export class TaskStore {
     if (!this.initialized) {
       if (records.some(record => interruptedOnRestart.has(record.status))) {
         records = await this.write(records.map(record => interruptedOnRestart.has(record.status)
-          ? { ...record, status: "interrupted" } : record));
+          ? { ...record, status: "interrupted", interruption: "runtime-restarted" } : record));
       }
       this.initialized = true;
     }

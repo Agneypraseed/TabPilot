@@ -18,11 +18,13 @@ Use desktop Chrome 118 or newer. In `chrome://extensions`, enable **Developer mo
 2. Choose a provider and enter its model ID and your own API key. Compatible providers also need their API base URL.
 3. Save settings, choose a web tab, and enter a task.
 
-Choose **Settings → Appearance → Light, Dark, or System** to change the interface. System follows your device’s appearance. Your choice saves immediately on this device, updates open panels, and stays across tabs, new chats, and browser restarts.
+Choose **Settings → Appearance** to switch between white Light, light Green, black Dark, and System. System follows your device’s light or dark appearance. Your choice saves immediately on this device, updates open panels, and stays across tabs, new chats, and browser restarts.
 
 Web tabs have access by default. Revoke individual tabs under **Settings → Tab access**. Browser-protected pages and the Chrome Web Store are unavailable. CAPTCHA challenges, logins, and native dialogs can require a user handoff.
 
 Keep Chrome running for schedules. Closing the workspace does not stop a task, but browser exit or extension reload interrupts active work. Review interrupted work before resuming. Scheduled work cannot execute while Chrome is closed; missed schedules are checked when the extension next runs. After a browser restart, review saved tasks and bind them to their current tabs before resuming. Session-only credentials must be entered again.
+
+The **Agent** chat shows live coordinator and specialist progress. When the task finishes, the chat keeps the final reply. Open **History** or use **View trace** in **Tasks** for verification details. After a restart or a lost connection, open **History → Review before continuing**. Review the last recorded step and trace, select an enabled tab, then choose **Continue on selected tab**. TabPilot returns to Agent, starts a fresh run, and requires a new page snapshot before browser actions.
 
 ## Optional developer server, CLI, and MCP
 
@@ -82,7 +84,7 @@ In a private chat with your bot, an approval alert that offers a reply accepts *
 
 The agent can send keyboard input to an enabled browser tab. For a game, ask it to focus the game and tap or briefly hold a key, for example “hold ArrowRight for 500 ms, then take a screenshot.” Each hold is capped at two seconds. This works for games that respond to ordinary browser keyboard events; the agent acts one tool call at a time, so it is better suited to deliberate movement than fast reactions.
 
-Delegated research runs keep their own browser history. Open **Research specialists** in the parent chat to see each worker's status, latest activity or result, and a link to its trace.
+Delegated research runs keep their own browser history. While the task is active, open **Research specialists** in the parent chat for live progress. In **History**, open the coordinator run or use the specialist links beneath it to review the specialist traces in the same place.
 
 Provider acceptance does not prove delivery. Sends time out after 10 seconds, do not block the agent, and are never retried automatically because an uncertain send may already have arrived. Failures appear in the Tasks summary without changing the task result. Alerts are best effort and are not replayed after a runtime restart.
 

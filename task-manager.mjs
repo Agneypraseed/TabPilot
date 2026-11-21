@@ -33,6 +33,7 @@ export class TaskManager {
         this.executing = new Set();
         this.executions = new Map();
         this.reservations = new Set();
+        this.resuming = new Set();
         this.selectedTab = null;
         this.revision = 0;
         this.preferences = new AgentService({ ...serviceOptions, sessionId: this.sessionId, manageTraceStore: false });
@@ -46,7 +47,15 @@ export class TaskManager {
         if (autoTick) { this.timer = setInterval(() => void this.tick().catch(error => { this.schedulerWarning = error.message; }), 1000); this.timer.unref?.(); }
     }
     async load() {
-        for (const record of await this.store.load()) this.records.set(record.id, record);
+        for (const record of await this.store.load()) {
+            if (record.parentTaskId && record.status === "queued") {
+                // A worker that was queued before the runtime stopped needs
+                // a fresh delegation from its coordinator.
+                record.status = "interrupted";
+                record.interruption = "runtime-restarted";
+            }
+            this.records.set(record.id, record);
+        }
     }
     get active() { return this.executing.size > 0; }
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -60,8 +69,43 @@ export class TaskManager {
         return this.connection && (record.scope === this.connection.scope ||
             (record.profileId && record.profileId === this.connection.profileId));
     }
+    async history(method, payload) {
+        const { taskId, ...query } = payload;
+        if (taskId !== undefined) {
+            // Resolve older tab namespaces from the saved task and validate
+            // that the requested trace belongs to it.
+            const record = this.records.get(uuid.parse(taskId));
+            if (!record || !this.visible(record) || record.tabId !== query.tabId || !this.taskRunIds(record).includes(query.runId) ||
+                !["history-events", "history-image"].includes(method)) throw new Error("This trace is not available for the saved task.");
+            query.scope = record.scope;
+        }
+        const result = await this.preferences.command(method, query);
+        if (method === "history-list") result.history.runs = result.history.runs.map(run => this.historySpecialists(run, query));
+        if (method === "history-events" && result.history.run) result.history.run = this.historySpecialists(result.history.run, query);
+        return result;
+    }
+    taskRunIds(record) {
+        const latest = this.sessions.get(record.id)?.state.runId ?? record.runId;
+        return [...new Set([...(record.runIds ?? []), latest].filter(Boolean))];
+    }
+    historySpecialists(run, { scope, tabId }) {
+        const parent = [...this.records.values()].find(record => this.visible(record) && record.scope === scope &&
+            record.tabId === tabId && this.taskRunIds(record).includes(run.runId));
+        if (!parent || parent.parentTaskId) return run;
+        const specialists = [...this.records.values()].filter(worker => worker.scope === scope && worker.parentTaskId === parent.id &&
+            (worker.parentRunId ?? this.taskRunIds(parent).at(-1)) === run.runId)
+            .flatMap(worker => {
+                const runs = this.taskRunIds(worker);
+                return runs.map((runId, index) => ({
+                    id: worker.id, parentTaskId: parent.id, tabId: worker.tabId, runId, prompt: worker.prompt,
+                    stage: runs.length > 1 ? index + 1 : undefined,
+                    status: index === runs.length - 1 ? worker.status : undefined
+                }));
+            });
+        return specialists.length ? { ...run, specialists } : run;
+    }
     snapshot() {
-        const selected = [...this.records.values()].filter(record => this.visible(record) && record.scope === this.connection.scope && record.tabId === this.selectedTab)
+        const selected = [...this.records.values()].filter(record => this.visible(record) && !record.resumedAs && record.scope === this.connection.scope && record.tabId === this.selectedTab)
             .sort((a, b) => Number(this.sessions.get(b.id)?.active ?? false) - Number(this.sessions.get(a.id)?.active ?? false) || b.createdAt - a.createdAt)[0];
         const service = selected && this.sessions.get(selected.id);
         const preferences = this.preferences.snapshot();
@@ -69,10 +113,12 @@ export class TaskManager {
         return { ...base, settings: preferences.settings, providers: preferences.providers, sessionId: this.sessionId, revision: this.revision,
             ...(selected?.status === "paused" && !service?.active ? { status: "needs-review" } : {}),
             selectedTabId: this.selectedTab, taskId: selected?.id, schedulerWarning: this.schedulerWarning, notificationWarning: this.notificationWarning, notificationDeliveries: [...this.notificationDeliveries.values()],
-            requests: [...this.sessions.values()].flatMap(session => session.snapshot().requests),
+            requests: [...this.sessions].filter(([id]) => this.records.get(id)?.scope === this.connection?.scope)
+                .flatMap(([, session]) => session.snapshot().requests),
             jobs: [...this.records.values()].filter(record => this.visible(record)).map(({ checkpoint, ...record }) => ({ ...record,
                 runId: this.sessions.get(record.id)?.state.runId ?? record.runId,
-                activity: this.sessions.get(record.id)?.state.events.findLast(event => event.kind === "tool" || event.kind === "status")?.text,
+                activity: record.lastStep?.tool ?? this.sessions.get(record.id)?.state.events.findLast(event => event.kind === "tool" || event.kind === "status")?.text,
+                executing: this.executing.has(record.id),
                 needsRebind: record.scope !== this.connection.scope })) };
     }
     emit() { this.revision++; const state = this.snapshot(); for (const listener of this.listeners) listener(state); }
@@ -96,7 +142,7 @@ export class TaskManager {
             update(channels.map(channel => ({ channel, status: 'sending' })));
             const telegramApproval = request?.kind === "approval" && request.question.trim().length <= 900 &&
                 (request.detail?.trim().length ?? 0) <= 1400 && this.notifications.telegramApprovals;
-            const result = await this.notifications.send(input, { telegramApproval });
+            const result = await this.notifications.send(input, { telegramApproval, taskRequest: Boolean(request) });
             const results = result.results ?? channels.map(channel => ({ channel, accepted: result.accepted }));
             const messageId = results.find(item => item.channel === "telegram" && item.accepted)?.messageId;
             if (telegramApproval && Number.isSafeInteger(messageId) && this.connection?.scope === request.scope) {
@@ -170,7 +216,7 @@ export class TaskManager {
     async command(method, payload = {}) {
         await this.ready;
         if (method === "state") return this.snapshot();
-        if (method.startsWith("history-")) return this.preferences.command(method, payload);
+        if (method.startsWith("history-")) return this.history(method, payload);
         if (method === "settings") {
             if (this.active) throw new Error("Stop active tasks before changing model settings.");
             await this.preferences.command(method, payload);
@@ -201,12 +247,7 @@ export class TaskManager {
             } else {
                 const resumable = ["interrupted", "failed", "paused", "waiting-for-tab", ...(record.scope !== this.connection.scope ? ["queued", "scheduled"] : [])];
                 if (session?.active || !resumable.includes(record.status)) throw new Error("This task cannot be resumed now.");
-                const input = taskInputSchema.parse({ ...this.input(record), scope: this.connection.scope,
-                    profileId: this.connection.profileId, tabId: z.number().int().nonnegative().parse(payload.tabId), notBefore: this.now(), repeatEveryMs: null });
-                // Fresh task + observation: never replay pending tool calls after a restart.
-                const resumed = await this.create({ ...input, prompt: `${input.prompt}\nResume after an interruption. First observe the current page and check what already happened. Do not repeat an uncertain submission. Previous progress: ${record.summary || "No verified completion recorded."}` }, { resumedFrom: record.id });
-                record.status = "cancelled"; record.cancelled = true; record.resumedAs = resumed.id;
-                await this.save(record);
+                await this.resume(record, payload.tabId);
             }
             await this.tick(); return this.snapshot();
         }
@@ -230,6 +271,37 @@ export class TaskManager {
         if (method === "human-response" && payload.decision === "deny") await this.pauseDeclinedTask(session);
         this.emit(); return this.snapshot();
     }
+    async resume(record, tabId) {
+        if (this.executing.has(record.id) || this.resuming.has(record.id) ||
+            [...this.records.values()].some(job => job.resumedFrom === record.id))
+            throw new Error("This task is still stopping or already has a continuation.");
+        if (record.parentTaskId) throw new Error("Continue the coordinator to recover its research.");
+        const connection = this.connection;
+        const input = taskInputSchema.parse({ ...this.input(record), scope: connection.scope,
+            profileId: connection.profileId, tabId, notBefore: this.now(), repeatEveryMs: null });
+        this.resuming.add(record.id);
+        try {
+            const available = await this.browser("tabs");
+            const tab = (Array.isArray(available) ? available : available.tabs).find(tab => tab.id === input.tabId);
+            if (this.connection !== connection) throw new Error("Reconnect before continuing this task.");
+            if (!tab) throw new Error("Choose a web tab with access enabled before continuing.");
+            if (record.cancelled) throw new Error("This task was cancelled.");
+            this.selectedTab = tabId;
+            const resumed = await this.create({ ...input, tabTitle: tab.title || (record.scope === input.scope && record.tabId === tabId ? record.tabTitle : undefined) },
+                { resumedFrom: record.id });
+            record.status = "cancelled"; record.cancelled = true; record.resumedAs = resumed.id;
+            await this.save(record);
+        } finally { this.resuming.delete(record.id); }
+    }
+    previousProgress(record) {
+        const source = this.records.get(record.resumedFrom);
+        if (!source) return null;
+        const lineage = new Set();
+        for (let task = source; task && !lineage.has(task.id); task = this.records.get(task.resumedFrom)) lineage.add(task.id);
+        const findings = [...this.records.values()].filter(job => lineage.has(job.parentTaskId) && job.status === "completed")
+            .slice(-5).map(job => ({ summary: job.summary?.slice(0, 1200), evidence: job.evidence?.slice(0, 1200) }));
+        return { summary: source.summary?.slice(0, 1600), lastStep: source.lastStep, declined: Boolean(source.declinedRequest), findings };
+    }
     input(record) {
         return Object.fromEntries(["scope", "profileId", "tabId", "tabTitle", "prompt", "mode", "notBefore", "repeatEveryMs", "maxStages", "allowResearch"].filter(key => record[key] !== undefined).map(key => [key, record[key]]));
     }
@@ -249,7 +321,8 @@ export class TaskManager {
             const enabled = new Set((Array.isArray(available) ? available : available.tabs).map(tab => tab.id));
             for (const record of [...this.records.values()]) {
                 if (connection !== this.connection) return;
-                if (record.scope !== connection.scope || record.cancelled || !["queued", "scheduled", "waiting-for-tab"].includes(record.status) || this.sessions.has(record.id)) continue;
+                if (record.scope !== connection.scope || record.cancelled || record.parentTaskId || this.resuming.has(record.id) ||
+                    !["queued", "scheduled", "waiting-for-tab"].includes(record.status) || this.sessions.has(record.id)) continue;
                 if (record.notBefore > this.now()) continue;
                 if (!enabled.has(record.tabId)) {
                     if (record.status !== "waiting-for-tab") { record.status = "waiting-for-tab"; await this.save(record); }
@@ -274,9 +347,12 @@ export class TaskManager {
                 if ([...this.records.values()].some(child => child.parentTaskId === record.id && !terminal.has(child.status))) return "A specialist is still working or waiting. Collect its result or ask the user for help before completing this task.";
                 completion = input; return "Completion recorded. Give the user a concise final response.";
             } });
+        const recoveryProgress = this.previousProgress(record);
         const session = this.createSession({ ...this.serviceOptions, settings: this.preferences.settings,
             sessionId: this.sessionId, manageTraceStore: false,
-            runnerOptions: service => ({ continueOnLimit: true, extraTools: [finish, ...this.coordinatorTools(record, service)], taskInstructions: "This is a persistent scheduled task. Use request_user_help for missing information or blockers. When the requested result is verified, call complete_task with evidence before your final answer. Do not claim completion from a plan or from reaching a turn limit. " +
+            runnerOptions: service => ({ continueOnLimit: true, requireFreshObservation: Boolean(record.resumedFrom),
+                recoveryProgress: record.stage === 1 ? recoveryProgress : null,
+                extraTools: [finish, ...this.coordinatorTools(record, service)], taskInstructions: "This is a persistent scheduled task. Use request_user_help for missing information or blockers. When the requested result is verified, call complete_task with evidence before your final answer. Do not claim completion from a plan or from reaching a turn limit. " +
                 (record.role === "research" ? "You are a research specialist. Read sources in your assigned tab and report relevant evidence and source URLs. Do not submit forms or make account changes unless the assigned task explicitly requires them. " : "For research needing another page, delegate_research opens a separate web tab with access by default and starts a specialist; respect any per-tab revocation. You can start independent specialists, then collect_worker_result before synthesizing. Do not invent worker results. ") }),
             onCheckpoint: async result => { record.checkpoint = checkpointHistory(result.history ?? []); await this.save(record); } });
         for (const [id, previous] of this.sessions) if (!previous.active && previous.state.tabId === record.tabId) {
@@ -291,6 +367,12 @@ export class TaskManager {
         const notifiedRequests = new Set();
         session.subscribe(state => {
             if (!session.active) return;
+            if (state.runId && record.runId !== state.runId) {
+                record.runIds = [...new Set([...(record.runIds ?? []), record.runId, state.runId].filter(Boolean))];
+                record.runId = state.runId;
+            }
+            const step = state.events.findLast(event => event.kind === "tool" && event.tool?.startsWith("browser_"));
+            if (step) record.lastStep = { tool: step.tool, phase: step.phase };
             for (const request of state.requests ?? []) {
                 if (notifiedRequests.has(request.id)) continue;
                 notifiedRequests.add(request.id);
@@ -366,7 +448,8 @@ export class TaskManager {
                 if (!(Array.isArray(available) ? available : available.tabs).some(tab => tab.id === opened.tabId))
                     return "Access to the new research tab was revoked or the page is protected. Do not restore access yourself; ask the user for help in Settings.";
                 const worker = await this.create({ ...this.input(record), tabId: opened.tabId, tabTitle: "Research specialist", prompt: task,
-                    mode: "browser", notBefore: this.now(), repeatEveryMs: null, allowResearch: false, maxStages: Math.min(record.maxStages, 10) }, { parentTaskId: record.id, role: "research" });
+                    mode: "browser", notBefore: this.now(), repeatEveryMs: null, allowResearch: false, maxStages: Math.min(record.maxStages, 10) },
+                    { parentTaskId: record.id, parentRunId: session.state.runId, role: "research" });
                 if (session.controller.signal.aborted) {
                     await this.cancel(worker);
                     session.controller.signal.throwIfAborted();
@@ -403,12 +486,12 @@ export class TaskManager {
                 await this.save(record);
                 if (record.cancelled) { record.status = "cancelled"; break; }
                 if (record.declinedRequest) { record.status = "paused"; break; }
-                if (!connection || connection !== this.connection) { record.status = "interrupted"; break; }
+                if (!connection || connection !== this.connection) { record.status = "interrupted"; record.interruption = "connection-lost"; break; }
                 await session.command("start", { scope: record.scope, tabId: record.tabId, mode: record.mode, tabTitle: record.tabTitle,
                     prompt: record.stage === 1 ? record.prompt : "Continue the same task from your saved observations. Check the current page before acting. Call complete_task only after verifying the outcome." });
                 await session.running;
                 record.runId = session.state.runId;
-                record.summary = session.state.events.findLast(event => event.kind === "assistant" || event.kind === "error")?.text;
+                record.summary = session.state.events.findLast(event => event.kind === "assistant" || event.kind === "error")?.text ?? record.summary;
                 if (record.cancelled) { record.status = "cancelled"; break; }
                 if (record.declinedRequest || session.declinedRequest) {
                     record.declinedRequest ??= session.declinedRequest;
@@ -416,7 +499,11 @@ export class TaskManager {
                     record.summary = "Paused because you declined a request. Review the task and give new direction before resuming.";
                     break;
                 }
-                if (session.state.status !== "completed") { record.status = session.state.status === "stopped" ? "interrupted" : "failed"; break; }
+                if (connection !== this.connection || session.state.status !== "completed") {
+                    record.status = connection !== this.connection || session.state.status === "stopped" ? "interrupted" : "failed";
+                    if (connection !== this.connection) record.interruption = "connection-lost";
+                    break;
+                }
                 if (completion() && ![...this.records.values()].some(child => child.parentTaskId === record.id && !terminal.has(child.status))) { record.status = "completed"; record.summary = completion().summary; record.evidence = completion().evidence; break; }
                 record.status = "continuing";
                 await this.save(record);

@@ -81,6 +81,43 @@ test('real SDK runs selected-tab tools directly, pauses for actual input, comple
  assert.ok(f.operations.filter(op=>op.operation==='browser').every(op=>op.payload.tabId===undefined||op.payload.tabId===12));
 });
 
+test('saved coordinator history links to all stages of its specialist on another tab',async t=>{
+ const f=fixture();
+ let workerStages=0;
+ const invoke=(options,name,args)=>options.extraTools.find(tool=>tool.name===name).invoke(new RunContext(),JSON.stringify(args));
+ const runtime=await createExtensionRuntime({...f,rpc:async(operation,payload)=>{
+    if(operation==='browser'&&payload.method==='tabs')return [{id:12},{id:34}];
+    if(operation==='browser'&&payload.method==='open')return {tabId:34};
+    return f.rpc(operation,payload);
+ },configure:async()=>({model:{},modelSettings:{},close:async()=>{}}),run:async(_prompt,options)=>{
+    if(options.targetTabId===12) {
+        const {workerId}=JSON.parse(await invoke(options,'delegate_research',{url:'https://example.com/',task:'Read the source'}));
+        await invoke(options,'collect_worker_result',{workerId});
+    } else if(++workerStages===1) return {answer:'First pass',history:[]};
+    await invoke(options,'complete_task',{summary:'Found the title',evidence:'Observed in the source'});
+    return {answer:'Found the title',history:[]};
+ }});
+ t.after(()=>runtime.close());
+ await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret}});
+ await runtime.command('start',{prompt:'Compare sources',tabId:12,mode:'browser',maxStages:2});
+ await until(()=>!runtime.manager.active);
+ await runtime.close();
+ const reopened=await createExtensionRuntime(f);
+ t.after(()=>reopened.close());
+ const list=await reopened.command('history-list',{tabId:12});
+ assert.equal(list.history.runs.length,1);
+ const [parent]=list.history.runs;
+ assert.deepEqual(parent.specialists.map(worker=>worker.stage),[1,2]);
+ assert.equal(parent.specialists[0].tabId,34);
+ const trace=await reopened.command('history-events',{tabId:12,runId:parent.runId});
+ assert.deepEqual(trace.history.run.specialists,parent.specialists);
+ const [first,second]=parent.specialists;
+ assert.notEqual(first.runId,second.runId);
+ const detail=await reopened.command('history-events',{taskId:first.id,tabId:first.tabId,runId:first.runId});
+ assert.match(JSON.stringify(detail.history.events),/First pass/);
+ await assert.rejects(reopened.command('history-events',{taskId:first.id,tabId:first.tabId,runId:parent.runId}),/trace is not available/);
+});
+
 test('persisted extension tasks recover interrupted runs and suspend/activate without a bridge',async t=>{
  const f=fixture();let entered=false;
  const runtime=await createExtensionRuntime({...f,run:async(_prompt,options)=>{entered=true;await new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));},configure:async()=>({model:{},modelSettings:{},close:async()=>{}})});
@@ -93,8 +130,63 @@ test('persisted extension tasks recover interrupted runs and suspend/activate wi
  const next=await createExtensionRuntime({...f,enabled:false});t.after(()=>next.close());
  await next.command('activate');
  assert.equal(next.snapshot().jobs[0].status,'interrupted');
+ assert.equal(next.snapshot().jobs[0].interruption,'connection-lost');
  assert.equal(next.manager.active,false);
  await runtime.close();
+});
+
+test('restart keeps the old trace, requires a fresh snapshot, and continues on the selected tab',async t=>{
+ const f=fixture();
+ let entered=false;
+ const config=async model=>({model,modelSettings:{},close:async()=>{}});
+ const first=await createExtensionRuntime({...f,configure:()=>config({}),run:async(_prompt,options)=>{
+  options.onActivity({tool:'browser_click',phase:'running'});
+  entered=true;
+  await new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
+ }});t.after(()=>first.close());
+ await first.command('runtime-configure',{rememberCredentials:true,credentials:{OPENAI_API_KEY:secret}});
+ const prompt='x'.repeat(12000);
+ await first.command('start',{prompt,tabId:12,mode:'browser',maxStages:1,allowResearch:false});
+ await until(()=>entered&&f.data.local['extension.tasks.v1']?.[0]?.lastStep?.phase==='running');
+ const old=first.snapshot().jobs[0];
+ assert.ok(old.runId);
+ const reopened=fixture();
+ Object.assign(reopened.data.local,structuredClone(f.data.local));
+ assert.notEqual(reopened.scope,f.scope);
+ let turn=0;
+ const tools=[];
+ const model={async getResponse(request){
+  turn++;
+  const call=(name,args)=>({usage:new Usage({requests:1}),output:[{type:'function_call',callId:'restart-'+turn,name,arguments:JSON.stringify(args)}]});
+  if(turn===1)return call('browser_click',{tabId:34,ref:'old'});
+  if(turn===2){assert.match(JSON.stringify(request.input),/fresh browser snapshot/);return call('browser_snapshot',{tabId:34});}
+  if(turn===3)return call('browser_click',{tabId:34,ref:'fresh'});
+  if(turn===4)return call('complete_task',{summary:'Done',evidence:'Checked the selected tab'});
+  return {usage:new Usage({requests:1}),output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'Done'}]}]};
+ },async *getStreamedResponse(){}};
+ const next=await createExtensionRuntime({...reopened,profileId:f.profileId,configure:()=>config(model),rpc:async(operation,payload)=>{
+  if(operation!=='browser')return reopened.rpc(operation,payload);
+  if(payload.method==='tabs')return [{id:34,title:'New target'}];
+  tools.push(payload.method);
+  return {title:'New target',url:'https://example.test/',elements:[]};
+ }});t.after(()=>next.close());
+ assert.equal(next.snapshot().jobs[0].interruption,'runtime-restarted');
+ assert.equal(next.snapshot().jobs[0].needsRebind,true);
+ assert.equal(turn,0);
+ const query={taskId:old.id,tabId:12,runId:old.runId};
+ const trace=await next.command('history-events',query);
+ assert.equal(trace.history.run.runId,old.runId);
+ await assert.rejects(next.command('history-events',{...query,tabId:34}),/trace is not available/);
+ await assert.rejects(next.command('task-resume',{taskId:old.id,tabId:12}),/access enabled/);
+ await next.command('task-resume',{taskId:old.id,tabId:34});
+ await until(()=>!next.manager.active);
+ assert.deepEqual(tools,['snapshot','click']);
+ assert.equal(next.snapshot().jobs.find(job=>job.resumedFrom===old.id).status,'completed');
+ assert.equal(next.snapshot().selectedTabId,34);
+ await assert.rejects(next.command('task-resume',{taskId:old.id,tabId:34}),/cannot be resumed|already has a continuation/);
+ const other=await createExtensionRuntime({...reopened,profileId:randomUUID(),scope:randomUUID()});
+ t.after(()=>other.close());
+ await assert.rejects(other.command('history-events',query),/trace is not available/);
 });
 
 test('history storage failures preserve successful browser tool results and never cause action replay',async t=>{
@@ -200,6 +292,8 @@ test('a direct private Telegram reply resolves only the matching live approval',
    }
    if(body.text.includes('Approve the fixture action?')) {
     assert.equal(body.reply_markup.force_reply,true);
+    assert.match(body.text,/Reply directly to this alert with OK to approve this action/);
+    assert.doesNotMatch(body.text,/Open TabPilot|does not approve/);
     return Response.json({ok:true,result:{message_id:10,chat}});
    }
    return Response.json({ok:true,result:{message_id:11,chat}});

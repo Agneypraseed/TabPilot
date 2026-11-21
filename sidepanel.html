@@ -132,6 +132,8 @@
         <button id="history-tab" aria-pressed="false">History</button>
       </nav>
       <main id="conversation" tabindex="0" aria-label="Agent conversation">
+        <section id="task-overview" class="specialist-progress" aria-label="Task progress" hidden></section>
+        <section id="specialist-progress" class="specialist-progress" aria-label="Research specialists" hidden></section>
         <section id="empty-state">
           <svg class="empty-mark"><use href="#i-tab" /></svg>
           <h2>Your browser.<br />Your copilot.</h2>
@@ -151,7 +153,6 @@
           aria-live="polite"
           aria-relevant="additions text"
         ></div>
-        <section id="specialist-progress" class="specialist-progress" aria-label="Research specialists" hidden></section>
         <figure id="observation" hidden>
           <button
             id="expand-image"
@@ -171,8 +172,13 @@
         id="history-view"
         class="history-view"
         hidden
-        aria-label="History for selected tab"
+        aria-label="History"
       >
+        <nav class="history-sections" aria-label="History views">
+          <button type="button" id="history-runs-tab" aria-controls="history-runs" aria-pressed="true">Runs</button>
+          <button type="button" id="history-review-tab" aria-controls="history-review" aria-pressed="false">Review before continuing</button>
+        </nav>
+        <div id="history-runs">
         <header class="history-header">
           <div>
             <h2>Tab history</h2>
@@ -186,7 +192,7 @@
             <svg><use href="#i-refresh" /></svg>
           </button>
         </header>
-        <p class="help">
+        <p class="help" id="history-context">
           Only this tab. Saved locally, including page observations.
         </p>
         <p id="history-status" role="status"></p>
@@ -197,6 +203,11 @@
         <button id="history-more" class="secondary full-width" hidden>
           Load more
         </button>
+        </div>
+        <section id="history-review" aria-label="Review before continuing" hidden>
+          <h2>Review before continuing</h2>
+          <div id="task-recovery" class="specialist-progress"></div>
+        </section>
       </section>
       <section id="tasks-view" class="tasks-view" hidden aria-label="Tasks for selected tab">
         <h2>Tasks for this tab</h2>
@@ -260,6 +271,7 @@
         <h3 id="appearance-heading">Appearance</h3>
         <div class="theme-options" role="group" aria-label="Color theme">
           <button type="button" data-theme-option="light" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg>Light</button>
+          <button type="button" data-theme-option="green" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4c-7 0-13 3-13 9a4 4 0 0 0 4 4c6 0 9-6 9-13ZM4 20l10-10"/></svg>Green</button>
           <button type="button" data-theme-option="dark" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.1A9 9 0 0 1 9.9 3.5a9 9 0 1 0 10.6 10.6Z"/></svg>Dark</button>
           <button type="button" data-theme-option="system" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>System</button>
         </div>

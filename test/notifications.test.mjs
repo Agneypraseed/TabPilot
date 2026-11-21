@@ -49,6 +49,20 @@ test("email and Telegram use configured destinations, plain text and bounded req
     }
 });
 
+test("group Telegram and email task alerts direct the user back to TabPilot", async () => {
+    const bodies = [];
+    const service = new Notifications({ env, fetch: async (url, options) => {
+        bodies.push(JSON.parse(options.body));
+        return accepted(url);
+    } });
+    await service.send(input, { taskRequest: true, telegramApproval: true });
+    assert.equal(bodies.length, 2);
+    for (const body of bodies) {
+        assert.match(body.text, /Open TabPilot to review and respond\.$/);
+        assert.equal(body.reply_markup, undefined);
+    }
+});
+
 test("channels fail independently, errors do not echo secrets, sends are never retried", async () => {
     let calls = 0;
     const service = new Notifications({ env, fetch: async url => {

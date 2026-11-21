@@ -28,8 +28,11 @@
     screenshotData = "",
     rendered = "";
   let workspaceView = "agent",
+    historySection = "runs",
+    historyOrigin = null,
     historyRun = null,
     historyWorker = null,
+    historyParent = null,
     historyTab = null,
     historyNext = null,
     historyBusy = false,
@@ -41,17 +44,14 @@
     );
   const attentionCards = new Map();
   const taskView = globalThis.TabPilotTaskView ? new globalThis.TabPilotTaskView({ document, command,
-    selected: () => selected, notice, mode: () => mode,
+    selected: () => selected, notice, mode: () => mode, viewTrace: openTaskTrace,
     viewAgent: async job => {
       selected = tabs.find(tab => tab.id === job.tabId) || selected;
       if (!selected || selected.id !== job.tabId) throw new Error("This tab is no longer open. Review and resume on a selected tab instead.");
       $("target-tab").value = String(selected.id);
       await command("select-tab", { tabId: selected.id });
       if (agent.taskId !== job.id && job.runId) {
-        showWorkspaceView("history");
-        historyRun = { runId: job.runId, task: job.prompt, status: job.status, startedAt: job.createdAt };
-        historyNext = null;
-        await refreshHistory();
+        openTaskTrace(job);
         return;
       }
       showWorkspaceView("agent");
@@ -81,7 +81,9 @@
       detail.className = "help";
       detail.textContent = pending.detail || "";
       const tabLabel = document.createElement("small");
-      tabLabel.textContent = tabs.find(tab => tab.id === pending.tabId)?.title || `Tab ${pending.tabId}`;
+      const job = agent?.jobs?.find(job => job.runId === pending.runId);
+      tabLabel.textContent = job?.parentTaskId ? `Specialist · ${job.prompt.slice(0, 100)}` :
+        tabs.find(tab => tab.id === pending.tabId)?.title || `Tab ${pending.tabId}`;
       card.append(tabLabel, title, question, detail);
       const delivery = document.createElement("p");
       delivery.className = "help alert-delivery";
@@ -253,12 +255,30 @@
   }
   function resetHistory() {
     historyWorker = null;
+    historyParent = null;
+    historyOrigin = null;
     historyTab = selected?.id;
     historyRun = null;
     historyNext = null;
     $("history-content").replaceChildren();
     $("history-more").hidden = true;
     $("history-back").hidden = true;
+  }
+  function showHistorySection(section) {
+    historySection = section;
+    for (const name of ["runs", "review"]) {
+      $(`history-${name}`).hidden = name !== section;
+      $(`history-${name}-tab`).setAttribute("aria-pressed", String(name === section));
+    }
+  }
+  function openTaskTrace(job) {
+    const origin = { view: workspaceView, section: historySection };
+    resetHistory();
+    historyOrigin = origin;
+    showHistorySection("runs");
+    historyWorker = job;
+    historyRun = { runId: job.runId, task: job.prompt, status: job.status };
+    showWorkspaceView("history");
   }
   function historyTime(time) {
     return new Date(time).toLocaleString([], {
@@ -283,7 +303,32 @@
       $("history-content").replaceChildren();
       refreshHistory();
     });
-    return button;
+    if (!run.specialists?.length) return button;
+    const group = document.createElement("div");
+    group.className = "history-run-group";
+    group.append(button, historySpecialistLinks(run));
+    return group;
+  }
+  function historySpecialistLinks(parent) {
+    const group = document.createElement("section");
+    group.className = "history-specialists";
+    group.append(taskText("h3", "Research specialists"));
+    for (const worker of parent.specialists) {
+      const label = worker.stage ? `${worker.prompt} · Stage ${worker.stage}` : worker.prompt;
+      const button = taskText("button", label);
+      button.type = "button";
+      button.className = "secondary";
+      button.addEventListener("click", () => {
+        historyParent = { run: parent, job: historyRun?.runId === parent.runId ? historyWorker : null };
+        historyWorker = worker;
+        historyRun = { runId: worker.runId, task: label, status: worker.status };
+        historyNext = null;
+        $("history-content").replaceChildren();
+        refreshHistory();
+      });
+      group.append(button);
+    }
+    return group;
   }
   function historyEventRow(event, tabId, runId) {
     const row = document.createElement("section");
@@ -344,6 +389,7 @@
           const response = await command("history-image", {
             tabId,
             runId,
+            ...(historyWorker?.id ? { taskId: historyWorker.id } : {}),
             artifactId: artifact.artifactId,
           });
           if ((historyWorker?.tabId ?? selected?.id) !== tabId || historyRun?.runId !== runId) return;
@@ -362,8 +408,13 @@
     return row;
   }
   async function refreshHistory(append = false) {
-    $("history-tab-label").textContent = historyWorker ? "Research specialist" : selected?.title || "Choose a tab";
-    if (!connected || !selected || !agent?.historyAvailable) {
+    $("history-tab-label").textContent = historyWorker ? historyWorker.parentTaskId ? "Research specialist" : "Saved task" : selected?.title || "Choose a tab";
+    $("history-context").textContent = historyWorker ? "Saved observations from this task's browser tab." : "Only this tab. Saved locally, including page observations.";
+    if (historySection !== "runs") return;
+    const backLabel = historyOrigin?.view === "history" ? "← Back to review" : historyOrigin?.view === "tasks" ? "← Back to tasks" : "← Back to chat";
+    $("history-back").textContent = historyParent ? "← Coordinator trace" : historyWorker ? backLabel : "← All runs for this tab";
+    $("history-back").hidden = !historyRun;
+    if (!connected || (!selected && !historyWorker) || !agent?.historyAvailable) {
       $("history-status").textContent = !connected
         ? executionMode === "bridge" ? "Connect the developer server to view its History." : "Starting extension History…"
         : !selected
@@ -384,18 +435,19 @@
     try {
       const response = await command(
         runId ? "history-events" : "history-list",
-        { tabId, ...(runId ? { runId } : {}), offset: offset || 0 },
+        { tabId, ...(runId ? { runId } : {}), ...(historyWorker?.id ? { taskId: historyWorker.id } : {}), offset: offset || 0 },
       );
       if (
         (historyWorker?.tabId ?? selected?.id) !== tabId ||
         historyRun?.runId !== runId ||
-        workspaceView !== "history"
+        workspaceView !== "history" || historySection !== "runs"
       )
         return;
       const data = response.history;
       if (runId && data.run) historyRun = data.run;
       if (!append) $("history-content").replaceChildren();
       $("history-back").hidden = !runId;
+      if (!append && runId && historyRun.specialists?.length) $("history-content").append(historySpecialistLinks(historyRun));
       const records = runId ? data.events : data.runs;
       for (const record of records)
         $("history-content").append(
@@ -613,7 +665,7 @@
       selected?.enabled ? "enabled" : "disabled",
     );
     renderTabAccess();
-    $("run-controls").hidden = !active();
+    $("run-controls").hidden = !connected || !active();
     $("run-status").textContent =
       {
         running: "Working…",
@@ -663,6 +715,7 @@
       );
     } else $("model-label").textContent = executionMode === "bridge" ? "Connect developer server ⌄" : "Choose your model ⌄";
     taskView?.render(agent, connected);
+    renderTaskProgress();
   }
   let tabAccessSignature = "";
   function renderTabAccess() {
@@ -732,11 +785,116 @@
     time.textContent = new Date(event.time).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
     row.append(content,time);
   }
+  const taskStatuses = { "needs-input": "Needs your input", "waiting-for-tab": "Waiting for tab",
+    "waiting-for-worker": "Waiting for specialists", running: "Working", completed: "Completed",
+    failed: "Failed", paused: "Paused", cancelled: "Cancelled", interrupted: "Interrupted",
+    queued: "Queued", scheduled: "Scheduled", continuing: "Continuing" };
+  function taskText(tag, value) {
+    const element = document.createElement(tag);
+    element.textContent = value;
+    return element;
+  }
+  function taskTraceButton(job) {
+    const button = taskText("button", "View trace");
+    button.type = "button";
+    button.className = "secondary";
+    button.addEventListener("click", () => openTaskTrace(job));
+    return button;
+  }
+  function taskDetail(job) {
+    const request = agent?.requests?.find(request => request.runId === job.runId && request.tabId === job.tabId);
+    if (request) return request.question;
+    if (["paused", "completed", "failed", "interrupted"].includes(job.status) && job.summary) return job.summary;
+    if (job.status === "waiting-for-worker") return "Waiting for research findings.";
+    return labels[job.activity] || job.activity || job.summary || "Waiting for the first update.";
+  }
+  function providerReady() {
+    return Boolean(agent?.providers?.find(provider => provider.id === agent.settings?.provider)?.configured);
+  }
+  let progressSignature = "";
+  function renderTaskProgress() {
+    const jobs = agent?.jobs ?? [];
+    const current = jobs.find(job => job.id === agent?.taskId && job.tabId === selected?.id && !job.needsRebind);
+    const continued = new Set(jobs.map(job => job.resumedFrom).filter(Boolean));
+    const recovery = jobs.filter(job => !job.parentTaskId && !job.resumedAs && !continued.has(job.id) &&
+      (["interrupted", "failed", "paused"].includes(job.status) ||
+        job.needsRebind && ["queued", "scheduled", "waiting-for-tab"].includes(job.status)) &&
+      !job.executing).sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+    const signature = JSON.stringify([current, current && taskDetail(current), recovery, connected, selected?.id, selected?.title, selected?.enabled, agent?.historyAvailable, providerReady()]);
+    if (signature !== progressSignature) {
+      progressSignature = signature;
+      const overview = $("task-overview");
+      overview.replaceChildren();
+      overview.hidden = !current || current.status === "completed" || recovery.includes(current) || Boolean(current.resumedAs);
+      if (!overview.hidden) {
+        overview.append(taskText("h3", connected ? taskStatuses[current.status] || current.status : "Connection lost"),
+          taskText("strong", current.prompt.split("\n")[0]),
+          taskText("p", connected ? taskDetail(current) : "Waiting for TabPilot to reconnect. Review any interrupted task before continuing."));
+        const source = jobs.find(job => job.id === current.resumedFrom);
+        if (source?.runId && connected && agent.historyAvailable) {
+          const previous = taskTraceButton(source);
+          previous.textContent = "View previous trace";
+          overview.append(previous);
+        }
+      }
+      renderRecovery(recovery);
+      $("empty-state").hidden = Boolean(agent?.events?.length || !overview.hidden);
+    }
+    renderSpecialists(current, recovery.includes(current));
+  }
+  function renderRecovery(jobs) {
+    const section = $("task-recovery");
+    section.replaceChildren();
+    section.classList.toggle("specialist-progress", jobs.length > 0);
+    if (!jobs.length) {
+      section.append(taskText("p", connected ? "No tasks need review." : "Connect to TabPilot to see tasks that need review.", "help"));
+      return;
+    }
+    for (const job of jobs) {
+      const row = document.createElement("article");
+      const reason = {
+        "connection-lost": "The browser connection dropped during this task.",
+        "runtime-restarted": "TabPilot restarted while this task was unfinished.",
+      }[job.interruption] || {
+        interrupted: "This task was interrupted before completion.",
+        failed: "This task stopped after an error.",
+        paused: "This task paused before completion.",
+      }[job.status] || "The original browser session ended. Choose where to run this task.";
+      row.append(taskText("strong", job.prompt.split("\n")[0]), taskText("p", reason));
+      if (job.summary) row.append(taskText("p", job.summary));
+      if (job.lastStep) {
+        const label = labels[job.lastStep.tool] || job.lastStep.tool;
+        row.append(taskText("p", `Last recorded step: ${label}. ${job.lastStep.phase === "complete" ? "The browser reported that the step finished." : "Its outcome may need to be verified."}`));
+      }
+      if (job.runId && connected && agent.historyAvailable) row.append(taskTraceButton(job));
+      const button = taskText("button", "Continue on selected tab");
+      button.type = "button";
+      button.className = "secondary";
+      button.disabled = !connected || !selected?.enabled || !providerReady();
+      const target = selected?.id;
+      row.append(taskText("p", !connected ? "Reconnect to continue." : !providerReady() ? "Configure your model provider in Settings to continue." : selected?.enabled
+        ? `TabPilot will check ${selected.title || host(selected.url)} before taking action.`
+        : "Choose a tab with access enabled."));
+      button.addEventListener("click", async () => {
+        if (!connected || !selected?.enabled || selected.id !== target || !providerReady()) return;
+        button.disabled = true;
+        try {
+          await command("task-resume", { taskId: job.id, tabId: target });
+          showWorkspaceView("agent");
+        }
+        catch (error) { notice(error.message); }
+        finally { button.disabled = !connected || !selected?.enabled || !providerReady(); }
+      });
+      row.append(button);
+      section.append(row);
+    }
+  }
   let renderedSpecialists = "";
-  function renderSpecialists() {
+  function renderSpecialists(current, needsReview) {
     const section = $("specialist-progress");
-    const workers = agent?.taskId ? (agent.jobs ?? []).filter(job => job.parentTaskId === agent.taskId && !job.needsRebind) : [];
-    const signature = JSON.stringify(workers.map(({ id, prompt, status, activity, summary, runId }) => [id, prompt, status, activity, summary, runId, agent.historyAvailable]));
+    const workers = agent?.taskId && current?.status !== "completed" && !needsReview
+      ? (agent.jobs ?? []).filter(job => job.parentTaskId === agent.taskId && !job.needsRebind) : [];
+    const signature = JSON.stringify(workers.map(worker => [worker, taskDetail(worker), connected, agent.historyAvailable]));
     if (signature === renderedSpecialists) return;
     renderedSpecialists = signature;
     const open = new Set([...section.querySelectorAll("details[open]")].map(row => row.dataset.taskId));
@@ -746,36 +904,20 @@
     const heading = document.createElement("h3");
     heading.textContent = "Research specialists";
     section.append(heading);
-    const statuses = { "needs-input": "Needs your input", "waiting-for-tab": "Waiting for tab", running: "Working",
-      completed: "Completed", failed: "Failed", paused: "Paused", cancelled: "Cancelled", interrupted: "Interrupted",
-      queued: "Queued", continuing: "Continuing" };
     for (const worker of workers) {
       const row = document.createElement("details");
       row.dataset.taskId = worker.id;
       row.open = open.has(worker.id);
       const title = document.createElement("summary");
-      title.textContent = `${statuses[worker.status] ?? worker.status} · ${worker.prompt.slice(0, 100)}`;
+      title.textContent = `${taskStatuses[worker.status] ?? worker.status} · ${worker.prompt.slice(0, 100)}`;
       const progress = document.createElement("p");
-      progress.textContent = worker.summary || labels[worker.activity] || worker.activity || "Waiting for the first update.";
+      progress.textContent = taskDetail(worker);
       row.append(title, progress);
-      if (worker.runId && agent.historyAvailable) {
-        const trace = document.createElement("button");
-        trace.type = "button";
-        trace.className = "secondary";
-        trace.textContent = "View trace";
-        trace.addEventListener("click", () => {
-          resetHistory();
-          historyWorker = worker;
-          historyRun = { runId: worker.runId, task: worker.prompt, status: worker.status };
-          showWorkspaceView("history");
-        });
-        row.append(trace);
-      }
+      if (worker.runId && connected && agent.historyAvailable) row.append(taskTraceButton(worker));
       section.append(row);
     }
   }
   function renderMessages() {
-    renderSpecialists();
     const events = agent?.events || [];
     const signature = events.map((e) => e.id).join();
     if (signature !== rendered) {
@@ -805,7 +947,7 @@
         }
       }
       rendered = signature;
-      $("empty-state").hidden = Boolean(events.length);
+      $("empty-state").hidden = Boolean(events.length || !$("task-overview").hidden);
       if (atEnd || events.at(-1)?.kind === "user")
         main.scrollTop = main.scrollHeight;
     }
@@ -851,7 +993,7 @@
     acceptRuntime(state.runtime);
     if (state.agent) receive(state.agent);
     else {
-      agent = null;
+      if (connected) agent = null;
       renderAttention([]);
       renderControls();
     }
@@ -1157,12 +1299,32 @@
     if (historyWorker) resetHistory();
     showWorkspaceView("history");
   });
+  $("history-runs-tab").addEventListener("click", () => {
+    resetHistory();
+    showHistorySection("runs");
+    refreshHistory();
+  });
+  $("history-review-tab").addEventListener("click", () => {
+    resetHistory();
+    showHistorySection("review");
+  });
   $("refresh-history").addEventListener("click", () => refreshHistory());
   $("history-more").addEventListener("click", () => refreshHistory(true));
   $("history-back").addEventListener("click", () => {
+    if (historyParent) {
+      historyRun = historyParent.run;
+      historyWorker = historyParent.job;
+      historyParent = null;
+      historyNext = null;
+      $("history-content").replaceChildren();
+      refreshHistory();
+      return;
+    }
     if (historyWorker) {
+      const origin = historyOrigin;
       resetHistory();
-      showWorkspaceView("agent");
+      if (origin?.view === "history") showHistorySection(origin.section);
+      showWorkspaceView(origin?.view ?? "agent");
       return;
     }
     historyRun = null;

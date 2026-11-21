@@ -70,7 +70,7 @@ export class Notifications {
         }
         return { offset, replies };
     }
-    async send(input, { telegramApproval = false } = {}) {
+    async send(input, { telegramApproval = false, taskRequest = false } = {}) {
         const { subject, message, channels } = notificationInputSchema.parse(input);
         const status = this.status();
         const selected = [...new Set(channels ?? Object.keys(status).filter(name => status[name].configured))];
@@ -80,7 +80,13 @@ export class Notifications {
             if (!status[name].configured) return { channel: name, accepted: false, error: "Channel is not configured. Check notifications_status." };
             try {
                 const reply = name === "telegram" && telegramApproval && this.telegramApprovals;
-                const response = await this.deliver(name, cleaned, reply);
+                const instructions = reply
+                    ? "Reply directly to this alert with OK to approve this action, or Deny to pause the task."
+                    : taskRequest ? "Open TabPilot to review and respond." : "";
+                const response = await this.deliver(name, {
+                    subject: cleaned.subject,
+                    message: instructions ? `${cleaned.message}\n\n${instructions}` : cleaned.message
+                }, reply);
                 // Do not echo provider bodies: they may contain credentials or recipients.
                 if (!response.ok) {
                     await response.body?.cancel();
@@ -115,7 +121,7 @@ export class Notifications {
         return this.fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             ...common, headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ chat_id: env.TABPILOT_TELEGRAM_CHAT_ID,
-                text: `${subject}\n\n${message}${reply ? "\n\nReply directly to this alert with OK to approve or Deny to pause this task." : ""}`,
+                text: `${subject}\n\n${message}`,
                 ...(reply ? { reply_markup: { force_reply: true, input_field_placeholder: "OK or Deny" } } : {}),
                 link_preview_options: { is_disabled: true } })
         });

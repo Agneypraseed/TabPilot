@@ -37,19 +37,39 @@
   color: var(--text);
   background: var(--bg);
 }
+:root[data-theme="green"] {
+  --bg: #eff8f0;
+  --surface: #f7fcf7;
+  --surface-soft: #e7f2e8;
+  --text: #18291e;
+  --muted: #4d6657;
+  --line: #cbded0;
+  --strong-line: #a8c3af;
+  --blue: #246643;
+  --button-bg: #246643;
+  --selected: #dceee0;
+  --hover: #e3f1e6;
+  --accent-hover: #194d31;
+  --accent-surface: #dcefe3;
+  --accent-text: #205d3c;
+  --switch-off: #b3c7ba;
+  --timeline-line: #b7d5c0;
+  --shadow: #15472a0f;
+  --focus-ring: #24664326;
+}
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #11151d;
-  --surface: #191f2b;
-  --surface-soft: #1d2432;
-  --text: #edf0f7;
-  --muted: #a6b0c2;
-  --line: #30394a;
-  --strong-line: #46526b;
+  --bg: #000;
+  --surface: #111;
+  --surface-soft: #191919;
+  --text: #f1f1f1;
+  --muted: #adadad;
+  --line: #303030;
+  --strong-line: #505050;
   --blue: #a3b4ff;
   --button-bg: #4663e0;
   --selected: #263353;
-  --hover: #252e40;
+  --hover: #242424;
   --accent-hover: #3855d3;
   --accent-surface: #253352;
   --accent-text: #b8c5ff;
@@ -62,7 +82,7 @@
   --warning-line: #66512f;
   --danger-bg: #352125;
   --danger-text: #ffb2a4;
-  --switch-off: #4c576d;
+  --switch-off: #555;
   --timeline-line: #3c4d77;
   --shadow: #0003;
   --focus-ring: #a3b4ff25;
@@ -78,10 +98,18 @@
 #tasks-summary { color: var(--muted); margin: 14px 0 8px; font-size: 12px; }
 .task-row { padding: 15px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .specialist-progress { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+#task-overview { margin-top: 0; }
+.history-sections { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.history-sections button { font-size: 12px; }
+.history-sections button[aria-pressed="true"] { background: var(--selected); color: var(--accent-text); border-color: var(--strong-line); }
+#history-review h2 { font-size: 18px; }
+#task-recovery > .help { margin-top: 10px; }
 .specialist-progress h3 { font-size: 13px; margin: 0 0 6px; }
 .specialist-progress details { padding: 6px 0; }
 .specialist-progress summary { cursor: pointer; }
 .specialist-progress p { margin: 8px 0; white-space: pre-wrap; }
+.specialist-progress article + article { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.specialist-progress button + button { margin-inline-start: 6px; }
 .task-heading { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .task-heading strong { font-size: 13px; line-height: 1.5; min-width: 0; }
 .task-status { color: var(--accent-text); background: var(--selected); border-radius: 6px; padding: 2px 7px; font-size: 10px; flex-shrink: 0; max-width: 43%; text-align: center; }
@@ -92,9 +120,7 @@
 .task-actions button { font-size: 11px; padding: 5px 10px; min-height: 30px; }
 .task-actions button:first-child { background: var(--selected); color: var(--accent-text); border-color: transparent; }
 .task-workers { margin: 0 0 12px 10px; padding-left: 15px; border-left: 2px solid var(--timeline-line); }
-.task-worker { position: relative; padding-top: 10px; border-bottom: 0; min-height: 84px; }
-.task-worker .task-activity { padding-right: 55px; }
-.task-worker .task-actions { position: absolute; bottom: 12px; right: 0; margin: 0; }
+.task-worker { position: relative; padding-top: 10px; border-bottom: 0; }
 .task-worker::before { content: ""; position: absolute; width: 12px; height: 2px; background: var(--timeline-line); top: 20px; left: -15px; }
 .schedule-details { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 16px; }
 .schedule-details summary { font-size: 16px; font-weight: 650; cursor: pointer; }
@@ -508,7 +534,17 @@ h3 {
   display: block;
   line-height: 1.6;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
+.history-specialists {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 14px 12px;
+  padding-left: 11px;
+  border-left: 2px solid var(--timeline-line);
+}
+.history-specialists h3 { margin: 0; font-size: 12px; }
+.history-specialists button { text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .history-run small,
 .history-meta {
   display: block;
@@ -1036,7 +1072,7 @@ body.settings-open #new-chat {
 /* One compact preference, separate from model and credential settings. */
 .theme-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   padding: 5px;
   border: 1px solid var(--line);

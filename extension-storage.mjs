@@ -56,7 +56,7 @@ export class ExtensionTaskStore {
   async readAndRecover() {
     let records = await this.read();
     if (!this.initialized) {
-      if (records.some(record => interrupted.has(record.status))) records = await this.write(records.map(record => interrupted.has(record.status) ? { ...record, status: "interrupted" } : record));
+      if (records.some(record => interrupted.has(record.status))) records = await this.write(records.map(record => interrupted.has(record.status) ? { ...record, status: "interrupted", interruption: "runtime-restarted" } : record));
       this.initialized = true;
     }
     return records;

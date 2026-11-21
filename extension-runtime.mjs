@@ -28,12 +28,13 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
     if(notificationPoll) notifications.telegramReplies = offset => notificationPoll({
         env:Object.fromEntries(['TELEGRAM_BOT_TOKEN','TABPILOT_TELEGRAM_CHAT_ID'].map(key=>[key,notifications.env[key]??''])), offset
     });
-    if(notificationSend) notifications.send = (value, {telegramApproval} = {}) => {
+    if(notificationSend) notifications.send = (value, {telegramApproval, taskRequest} = {}) => {
         const input = notificationInputSchema.parse(value);
         const notificationKeys = ['TELEGRAM_BOT_TOKEN','TABPILOT_TELEGRAM_CHAT_ID','RESEND_API_KEY','TABPILOT_EMAIL_FROM','TABPILOT_EMAIL_TO'];
         return notificationSend({env:Object.fromEntries(notificationKeys.filter(key=>!!notifications.env[key]).map(key=>[key,notifications.env[key]])),
             input:{...input,subject:trace.clean(input.subject),message:trace.clean(input.message)},
-            ...(telegramApproval ? {telegramApproval:true} : {})});
+            ...(telegramApproval ? {telegramApproval:true} : {}),
+            ...(taskRequest ? {taskRequest:true} : {})});
     };
     const manager = new TaskManager({autoTick:false,
         store:new ExtensionTaskStore(database,{...storageLimits,sanitize:record=>trace.clean(record)}),

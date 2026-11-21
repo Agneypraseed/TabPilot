@@ -1,7 +1,7 @@
 /* Display preferences belong to the extension, independently of agent runs. */
 (() => {
   const key = "tabpilotAppearance";
-  const valid = value => ["system", "light", "dark"].includes(value);
+  const valid = value => ["system", "light", "green", "dark"].includes(value);
   const system = matchMedia("(prefers-color-scheme: dark)");
   const storage = globalThis.chrome?.storage;
   let preference = "system";

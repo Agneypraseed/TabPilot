@@ -5,13 +5,14 @@ const notificationKeys = ['TELEGRAM_BOT_TOKEN', 'TABPILOT_TELEGRAM_CHAT_ID', 'RE
 const requestSchema = z.object({
     env: z.object(Object.fromEntries(notificationKeys.map(key => [key, z.string().max(4000).optional()]))).strict(),
     input: notificationInputSchema,
-    telegramApproval: z.boolean().optional()
+    telegramApproval: z.boolean().optional(),
+    taskRequest: z.boolean().optional()
 }).strict();
 
 // Only fixed notification providers can be contacted through this service.
 // The background's sender check is the boundary; never accept arbitrary URLs.
 export async function sendExtensionNotification(payload, { permissions, fetch: fetcher } = {}) {
-    const {env, input, telegramApproval} = requestSchema.parse(payload);
+    const {env, input, telegramApproval, taskRequest} = requestSchema.parse(payload);
     const service = new Notifications({env, ...(fetcher ? {fetch: fetcher} : {})});
     const status = service.status();
     const channels = [...new Set(input.channels ?? Object.keys(status).filter(name => status[name].configured))];
@@ -25,7 +26,7 @@ export async function sendExtensionNotification(payload, { permissions, fetch: f
             if (!granted) return {channel, accepted: false, errorCode: 'HOST_PERMISSION',
                 error: `The extension does not have access to ${channel === 'telegram' ? 'Telegram' : 'Resend'}. Use Send test alert in Settings to grant access. No message was sent.`};
         }
-        return (await service.send({...input, channels: [channel]}, {telegramApproval})).results[0];
+        return (await service.send({...input, channels: [channel]}, {telegramApproval, taskRequest})).results[0];
     }));
     return {accepted: results.every(item => item.accepted), results};
 }

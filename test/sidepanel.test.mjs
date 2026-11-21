@@ -10,6 +10,39 @@ const source = (await readFile(new URL("../tab-access.js", import.meta.url), "ut
 const tasksSource = await readFile(new URL("../task-view.js", import.meta.url), "utf8");
 const markdownSource = (await Promise.all(["vendor/marked.js", "vendor/purify.js", "markdown.js"].map(path => readFile(new URL(`../${path}`, import.meta.url), "utf8")))).join("\n");
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test("Agent shows live blockers and History holds tasks ready for review", async () => {
+    const ui = await panel({ formatted: true });
+    const $ = id => ui.document.getElementById(id);
+    const job = { id: "job-1", tabId: 12, prompt: "Send the report", runId: "old-run", executing: true, status: "needs-input" };
+    ui.receive({ ...ui.agent, revision: 2, taskId: job.id, jobs: [job],
+        requests: [{ id: "req", runId: job.runId, tabId: 12, kind: "approval", question: "Send the prepared report?" }] });
+    assert.match($("task-overview").textContent, /Needs your input.*Send the prepared report\?/);
+    ui.receive({ ...ui.agent, revision: 3, jobs: [{ ...job, executing: false, tabId: 90, status: "interrupted", needsRebind: true, updatedAt: 10,
+        interruption: "runtime-restarted", lastStep: { tool: "browser_click", phase: "running" } },
+        { id: "other-job", tabId: 34, status: "failed", prompt: "Review a task on another tab", updatedAt: 9 }] });
+    const recovery = $("task-recovery");
+    assert.equal($("conversation").contains(recovery), false);
+    assert.equal($("history-view").hidden, true);
+    await ui.dispatch("history-tab");
+    assert.equal($("history-review").hidden, true);
+    await ui.dispatch("history-review-tab");
+    assert.equal($("history-review").hidden, false);
+    assert.match(recovery.textContent, /restarted.*outcome may need to be verified/s);
+    assert.match(recovery.textContent, /Review a task on another tab/);
+    recovery.querySelector("button").click();
+    await flush();
+    const trace = ui.calls.find(call => call.method === "history-events");
+    assert.equal(trace.payload.taskId, job.id);
+    assert.equal(trace.payload.tabId, 90);
+    await ui.dispatch("history-back");
+    assert.equal($("history-review").hidden, false);
+    recovery.querySelectorAll("button")[1].click();
+    await flush();
+    const resume = ui.calls.find(call => call.method === "task-resume");
+    assert.equal(resume.payload.taskId, job.id);
+    assert.equal(resume.payload.tabId, 12);
+    assert.equal($("conversation").hidden, false);
+});
 test("parent chat shows live specialist updates and opens the child trace without selecting its tab", async () => {
     const ui = await panel({ formatted: true });
     const section = ui.document.getElementById("specialist-progress");
@@ -19,9 +52,10 @@ test("parent chat shows live specialist updates and opens the child trace withou
     assert.match(section.textContent, /Working · Read the source.*Reading the page/);
     assert.doesNotMatch(section.textContent, /Unrelated worker/);
     section.querySelector("details").open = true;
-    ui.receive({ ...ui.agent, revision: 3, taskId: "root", jobs: [{ ...child, status: "completed", summary: "Found evidence" }] });
+    ui.receive({ ...ui.agent, revision: 3, taskId: "root", jobs: [{ ...child, status: "completed", summary: "Found evidence", evidence: "Raw screenshot identifier" }] });
     assert.equal(section.querySelector("details").open, true);
     assert.match(section.textContent, /Completed · Read the source.*Found evidence/);
+    assert.doesNotMatch(section.textContent, /Raw screenshot identifier/);
     section.querySelector("button").click();
     await flush();
     assert.equal(ui.calls.find(call => call.method === "history-events").payload.tabId, 34);
@@ -29,6 +63,12 @@ test("parent chat shows live specialist updates and opens the child trace withou
     assert.ok(!ui.calls.some(call => call.method === "select-tab" && call.payload.tabId === 34));
     await ui.dispatch("history-back");
     assert.equal(ui.document.getElementById("conversation").hidden, false);
+    ui.receive({ ...ui.agent, revision: 4, taskId: "root", jobs: [child,
+        { id: "root", tabId: 12, prompt: "Compare sources", status: "completed", evidence: "Raw coordinator trace" }],
+        events: [{ id: "final-reply", kind: "assistant", text: "The sources agree." }] });
+    assert.equal(ui.document.getElementById("task-overview").hidden, true);
+    assert.equal(section.hidden, true);
+    assert.match(ui.document.getElementById("messages").textContent, /The sources agree/);
 });
 test("Tasks keeps workers with their parent tab, safely renders prompts, and submits schedule controls", async () => {
     const ui = await panel(), $ = id => ui.document.getElementById(id);
@@ -194,6 +234,39 @@ test("History loads only the selected tab, displays trace details safely, and st
     await ui.dispatch("agent-tab");
     assert.equal($("history-view").hidden, true);
     assert.equal($("conversation").hidden, false);
+});
+
+test("History nests specialist stages and returns from a child trace to its coordinator", async () => {
+    const ui = await panel({ formatted: true });
+    const $ = id => ui.document.getElementById(id);
+    const worker = { id: "worker", runId: "stage-1", parentTaskId: "parent", tabId: 34, prompt: "Read the source", stage: 1 };
+    const root = { runId: "root-run", task: "Compare sources", status: "completed", startedAt: 1,
+        specialists: [worker, { ...worker, runId: "stage-2", stage: 2 }] };
+    const send = ui.chrome.runtime.sendMessage;
+    const queried = [];
+    ui.chrome.runtime.sendMessage = async message => {
+        if (message.method === "history-list") return { ok: true, history: { runs: [root], nextOffset: null } };
+        if (message.method !== "history-events") return send(message);
+        queried.push(message.payload);
+        const child = message.payload.runId === "stage-1";
+        return { ok: true, history: { run: child ? { runId: "stage-1", task: "Read the source", status: "completed" } : root,
+            events: [{ kind: "assistant", text: child ? "Specialist found the answer" : "Coordinator result", time: 1 }], nextOffset: null } };
+    };
+    await ui.dispatch("history-tab");
+    assert.equal($("history-content").querySelectorAll(".history-run-group .history-specialists button").length, 2);
+    $("history-content").querySelector(".history-run").click();
+    await flush();
+    assert.match($("history-content").textContent, /Read the source · Stage 1/);
+    $("history-content").querySelector(".history-specialists button").click();
+    await flush();
+    assert.equal(queried.at(-1).taskId, "worker");
+    assert.equal(queried.at(-1).tabId, 34);
+    assert.equal(queried.at(-1).runId, "stage-1");
+    assert.match($("history-content").textContent, /Specialist found the answer/);
+    await ui.dispatch("history-back");
+    assert.equal(queried.at(-1).runId, "root-run");
+    assert.match($("history-content").textContent, /Coordinator result/);
+    assert.equal($("target-tab").value, "12");
 });
 
 test("late history replies cannot show a previous tab's records after switching tabs", async () => {

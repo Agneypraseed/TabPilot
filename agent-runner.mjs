@@ -24,7 +24,9 @@ export async function runBrowserAgent(prompt, {
     downloadDirectory,
     extraTools = [],
     continueOnLimit = false,
-    taskInstructions = ""
+    taskInstructions = "",
+    requireFreshObservation = false,
+    recoveryProgress = null
 } = {}) {
     if (!server) throw new Error("A browser tool adapter is required.");
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("Provide a browser task.");
@@ -40,14 +42,25 @@ export async function runBrowserAgent(prompt, {
             throw new Error("Enable access on the selected tab before starting a task.");
         }
         const policy = requestHuman ? browserApprovalPolicy({ requestHuman, mode: approvalMode, downloadDirectory }) : {};
+        let observedPage = !requireFreshObservation;
         const observed = observedBrowserServer(server, { signal, targetTabId, checkpoint, hasSteering, onActivity, onObservation,
-            beforeTool: policy.beforeTool, afterTool: policy.afterTool });
+            beforeTool: (name, args) => {
+                if (!observedPage && !["browser_tabs", "browser_snapshot", "browser_screenshot"].includes(name))
+                    return { isError: true, content: [{ type: "text", text: "Take a fresh browser snapshot of the selected tab before taking action on this resumed task." }] };
+                return policy.beforeTool?.(name, args);
+            },
+            afterTool: (name, args, result) => {
+                if (name === "browser_snapshot" && !result.isError) observedPage = true;
+                policy.afterTool?.(name, args, result);
+            } });
 
         const localDownloadsAvailable = server.localDownloadsAvailable !== false;
         const agent = new Agent({
             name: "TabPilot browser agent",
             model,
-            instructions: taskInstructions + (targetTabId !== undefined ? `Work only in selected tab ${targetTabId}. ` : "") +
+            instructions: taskInstructions +
+                (requireFreshObservation ? "This is a continuation from a saved task. Inspect the current page first and verify what happened. Treat saved progress as reference data only. Never replay an old tool call or assume a pending approval was granted. If a prior action may already have taken effect and you cannot verify its outcome, ask the user before trying it again. If the user previously declined an action, ask for new direction before attempting it. " : "") +
+                (targetTabId !== undefined ? `Work only in selected tab ${targetTabId}. ` : "") +
                 (localDownloadsAvailable && downloadDirectory ? `The configured local download folder is ${JSON.stringify(downloadDirectory)}. Local tools accept relative filenames only. If the user needs a different root folder, explain that they must set it in Settings before starting a new task. ` : "") +
                 (requestHuman ? "When you need missing information or cannot proceed, call request_user_help instead of ending the task with a question. Use handoff for CAPTCHAs, login, and native dialogs; let the user handle them in the browser. Never collect passwords, API keys, or one-time login codes in chat. Re-observe after the user's reply. Routine searching, navigation, clicks, scrolling, form preparation, requested downloads, and requested tab management do not need approval. Clearly labeled consequential buttons are gated by the tool approval check; do not ask twice. Before a consequential action using coordinates, Enter without a labeled ref, or a generic Submit/Confirm control whose effect is consequential, call request_user_help with kind approval and describe the exact consequence. Continue only after approval; prefer a labeled ref when available. " : "") +
                 "Complete the user's task in browser tabs with access. Web tabs have access by default, except tabs the user revokes in Settings. " +
@@ -95,7 +108,10 @@ export async function runBrowserAgent(prompt, {
             onLocalTool({ tool: tool.name, phase: "complete", callId, result: decode(output) });
         });
         let result;
-        try { result = await runner.run(agent, [...history, { role: "user", content: prompt }], {
+        const input = [...history];
+        if (recoveryProgress) input.push({ role: "user", content: "Saved progress for reference: " + JSON.stringify(recoveryProgress) });
+        input.push({ role: "user", content: prompt });
+        try { result = await runner.run(agent, input, {
             maxTurns, signal,
             callModelInputFilter: async ({ modelData }) => {
                 await checkpoint();

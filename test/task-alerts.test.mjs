@@ -17,7 +17,8 @@ test('permission request uses observed action, recipient, subject and page witho
  assert.match(requests[0].detail,/Subject: Project update/);assert.match(requests[0].detail,/mail.google.com/);
  const alert=taskRequestAlert({id:'internal-task-id',tabId:12,tabTitle:'Old tab',prompt:'Private entire task prompt'},requests[0]);
  assert.ok(alert.message.startsWith(requests[0].question));
- assert.match(alert.message,/Project update/);assert.match(alert.message,/Open TabPilot/);
+ assert.match(alert.message,/Project update/);
+ assert.doesNotMatch(alert.message,/Open TabPilot|Reply directly/);
  for(const privateText of ['private-query','private-password','Private full message body','Private entire task prompt','internal-task-id','Old tab'])assert.ok(!alert.message.includes(privateText),privateText);
 });
 
