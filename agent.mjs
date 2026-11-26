@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
 import { parseAgentArguments, agentUsage } from "./agent-options.mjs";
 import { runBrowserAgent as runPortableBrowserAgent } from "./agent-runner.mjs";
+import { requestBridge } from "./bridge-client.mjs";
+import { actionParameters, mcpActionName } from "./commands.mjs";
 
 export async function runBrowserAgent(prompt, options = {}) {
     const server = options.server ?? new MCPServerStdio({
@@ -14,6 +16,26 @@ export async function runBrowserAgent(prompt, options = {}) {
         cacheToolsList: true, useStructuredContent: false, clientSessionTimeoutSeconds: 30,
         ...(options.traceContext ? { env: { ...process.env, TABPILOT_RUN_ID: options.traceContext.runId } } : {})
     });
+    if (!options.server && options.requestHuman) {
+        const methods = new Map(Object.keys(actionParameters).map(method => [mcpActionName(method), method]));
+        const bridgeOptions = { source: "mcp", runId: options.traceContext?.runId };
+        const callToolResult = server.callToolResult.bind(server);
+        server.inspectApproval = (name, { tabId, ...params }, { signal } = {}) => requestBridge("approval-context", tabId,
+            { action: { method: methods.get(name), params } }, { ...bridgeOptions, signal });
+        server.callToolResult = async (name, args, meta, callOptions = {}) => {
+            if (!callOptions.approval) return callToolResult(name, args, meta, callOptions);
+            const { tabId, ...params } = args;
+            try {
+                callOptions.signal?.throwIfAborted();
+                const data = await requestBridge(methods.get(name), tabId, params,
+                    { ...bridgeOptions, approval: callOptions.approval, signal: callOptions.signal });
+                return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }], structuredContent: data };
+            } catch (error) {
+                callOptions.signal?.throwIfAborted();
+                return { isError: true, content: [{ type: "text", text: error.message }] };
+            }
+        };
+    }
     return runPortableBrowserAgent(prompt, { ...options, server });
 }
 

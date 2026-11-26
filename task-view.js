@@ -1,12 +1,13 @@
 // Local task controls; all model execution and persistence live in the bridge.
 class TabPilotTaskView {
-    constructor({ document, command, selected, notice, viewAgent, viewTrace, mode }) {
+    constructor({ document, command, selected, notice, viewAgent, viewTrace, reviewTask, mode }) {
         this.document = document;
         this.command = command;
         this.selected = selected;
         this.notice = notice;
         this.viewAgent = viewAgent;
         this.viewTrace = viewTrace;
+        this.reviewTask = reviewTask;
         this.mode = mode;
         this.$ = id => document.getElementById(id);
         this.$("schedule-form").addEventListener("submit", event => void this.schedule(event));
@@ -63,12 +64,13 @@ class TabPilotTaskView {
         const actions = this.element("div", undefined, "task-actions");
         if (!job.needsRebind && !["queued", "scheduled", "waiting-for-tab"].includes(job.status)) this.action(actions, child ? "View" : "View agent", () => this.viewAgent(job));
         if (job.runId) this.action(actions, "View trace", () => this.viewTrace(job));
-        if (!child && !job.executing && !job.resumedAs && (job.needsRebind && !["completed", "cancelled"].includes(job.status) || ["interrupted", "failed", "paused"].includes(job.status)))
-            this.action(actions, job.needsRebind ? "Use selected tab" : "Review and resume", () => {
-                const tab = this.selected();
-                if (!tab?.enabled) throw new Error("Choose a tab with access enabled.");
-                return this.command("task-resume", { taskId: job.id, tabId: tab.id });
-            });
+        if (!child && !job.executing && !job.resumedAs && (job.scheduleNeedsReview ||
+            job.needsRebind && !["completed", "cancelled"].includes(job.status) || ["interrupted", "failed", "paused", "waiting-for-tab"].includes(job.status)))
+            this.action(actions, job.pendingSchedule ? "Review schedule" : "Review and resume", () => this.reviewTask(job));
+        if (job.repeatScheduleFailed) {
+            article.append(this.element("p", "The task finished. Its next occurrence could not be saved.", "task-activity"));
+            this.action(actions, "Retry scheduling", () => this.command("task-retry-repeat", { taskId: job.id }));
+        }
         if (!child && !["completed", "failed", "cancelled", "interrupted"].includes(job.status))
             this.action(actions, ["queued", "scheduled", "waiting-for-tab"].includes(job.status) ? "Cancel" : "Stop", () => this.command("task-cancel", { taskId: job.id }));
         article.append(actions);

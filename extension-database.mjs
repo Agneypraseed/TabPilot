@@ -2,7 +2,10 @@
 // Credentials deliberately remain in Chrome's local/session settings stores.
 const STORE = 'records';
 const MIGRATION_KEY = 'extension.database.migration.v1';
+const HISTORY_SCOPE = 'history-scope';
+const HISTORY_TAB = 'history-tab';
 const writers = new WeakMap();
+const historyKeys = new WeakMap();
 
 function databaseError(error) {
     if (error?.name === 'QuotaExceededError') return new Error('Browser task storage could not be saved because the device or browser storage quota is full. Free disk space and try again; existing records have been preserved.');
@@ -27,6 +30,10 @@ export class ExtensionDatabaseStorage {
         this.openTimeoutMs = openTimeoutMs;
         this.connection = null;
         this.opening = null;
+        let names = historyKeys.get(indexedDB);
+        if (!names) { names = new Map(); historyKeys.set(indexedDB, names); }
+        if (!names.has(name)) names.set(name, {});
+        this.historyQueueKey = names.get(name);
     }
     queue(operation) {
         let databases = writers.get(this.indexedDB);
@@ -53,12 +60,16 @@ export class ExtensionDatabaseStorage {
                 }
             };
             const timer = setTimeout(() => finish(new Error('Opening browser task storage timed out. Close other TabPilot windows and reopen the extension; saved records have not been changed.')), this.openTimeoutMs);
-            try { request = this.indexedDB.open(this.name, 1); }
+            try { request = this.indexedDB.open(this.name, 2); }
             catch (error) { finish(databaseError(error)); return; }
             request.onupgradeneeded = () => {
                 if (settled) { request.transaction.abort(); return; }
                 // Never recreate or clear an existing store during upgrades.
-                if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
+                const store = request.result.objectStoreNames.contains(STORE)
+                    ? request.transaction.objectStore(STORE)
+                    : request.result.createObjectStore(STORE);
+                if (!store.indexNames.contains(HISTORY_SCOPE)) store.createIndex(HISTORY_SCOPE, 'scope');
+                if (!store.indexNames.contains(HISTORY_TAB)) store.createIndex(HISTORY_TAB, ['scope', 'tabId']);
             };
             request.onblocked = () => finish(new Error('Browser task storage is blocked by another open TabPilot window. Close older extension windows and reopen TabPilot; saved records have not been changed.'));
             request.onerror = () => finish(databaseError(request.error));
@@ -118,6 +129,44 @@ export class ExtensionDatabaseStorage {
     remove(key) {
         const keys = keysOf(key);
         return this.queue(() => this.transaction('readwrite', store => { for (const item of keys) store.delete(item); }));
+    }
+    historyMetadata(prefix, scope, tabId) {
+        return this.queue(() => this.transaction('readonly', (store, result, guard) => {
+            const records = [];
+            result(records);
+            const index = store.index(tabId === undefined ? HISTORY_SCOPE : HISTORY_TAB);
+            const request = index.openKeyCursor(tabId === undefined ? scope : [scope, tabId]);
+            request.onsuccess = guard(() => {
+                const cursor = request.result;
+                if (!cursor) return;
+                const key = cursor.primaryKey;
+                if (typeof key === 'string' && key.startsWith(prefix) && key.endsWith('.meta')) {
+                    const entry = store.get(key);
+                    entry.onsuccess = () => records.push([key, entry.result]);
+                }
+                cursor.continue();
+            });
+        }));
+    }
+    removeHistoryRuns(prefixes) {
+        const ranges = keysOf(prefixes).sort();
+        if (!ranges.length) return Promise.resolve(0);
+        return this.queue(() => this.transaction('readwrite', (store, result, guard) => {
+            let index = 0, deleted = 0;
+            const request = store.openKeyCursor();
+            request.onsuccess = guard(() => {
+                const cursor = request.result;
+                if (!cursor) { result(deleted); return; }
+                const key = cursor.key;
+                while (index < ranges.length && key > ranges[index] && !key.startsWith(ranges[index])) index++;
+                const prefix = ranges[index];
+                if (prefix === undefined) { result(deleted); return; }
+                if (key < prefix) { cursor.continue(prefix); return; }
+                store.delete(key);
+                deleted++;
+                cursor.continue();
+            });
+        }));
     }
     // Called only at runtime startup. The marker and every imported value commit
     // in the same transaction; existing database values always win over legacy.

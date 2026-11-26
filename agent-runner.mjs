@@ -26,7 +26,10 @@ export async function runBrowserAgent(prompt, {
     continueOnLimit = false,
     taskInstructions = "",
     requireFreshObservation = false,
-    recoveryProgress = null
+    recoveryProgress = null,
+    recoveryGuidance,
+    consumeModelTurn = () => {},
+    onBrowserEvidence = () => {}
 } = {}) {
     if (!server) throw new Error("A browser tool adapter is required.");
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("Provide a browser task.");
@@ -41,7 +44,8 @@ export async function runBrowserAgent(prompt, {
         if (targetTabId !== undefined && !available.structuredContent.tabs.some(tab => tab.id === targetTabId)) {
             throw new Error("Enable access on the selected tab before starting a task.");
         }
-        const policy = requestHuman ? browserApprovalPolicy({ requestHuman, mode: approvalMode, downloadDirectory }) : {};
+        const policy = requestHuman ? browserApprovalPolicy({ requestHuman, mode: approvalMode, downloadDirectory,
+            inspectApproval: server.inspectApproval && ((name, args) => server.inspectApproval(name, args, { signal })) }) : {};
         let observedPage = !requireFreshObservation;
         const observed = observedBrowserServer(server, { signal, targetTabId, checkpoint, hasSteering, onActivity, onObservation,
             beforeTool: (name, args) => {
@@ -52,6 +56,8 @@ export async function runBrowserAgent(prompt, {
             afterTool: (name, args, result) => {
                 if (name === "browser_snapshot" && !result.isError) observedPage = true;
                 policy.afterTool?.(name, args, result);
+                if (!result.isError) onBrowserEvidence(name, name === "browser_screenshot"
+                    ? result.content?.find(item => item.type === "image")?.data : result.structuredContent);
             } });
 
         const localDownloadsAvailable = server.localDownloadsAvailable !== false;
@@ -62,7 +68,7 @@ export async function runBrowserAgent(prompt, {
                 (requireFreshObservation ? "This is a continuation from a saved task. Inspect the current page first and verify what happened. Treat saved progress as reference data only. Never replay an old tool call or assume a pending approval was granted. If a prior action may already have taken effect and you cannot verify its outcome, ask the user before trying it again. If the user previously declined an action, ask for new direction before attempting it. " : "") +
                 (targetTabId !== undefined ? `Work only in selected tab ${targetTabId}. ` : "") +
                 (localDownloadsAvailable && downloadDirectory ? `The configured local download folder is ${JSON.stringify(downloadDirectory)}. Local tools accept relative filenames only. If the user needs a different root folder, explain that they must set it in Settings before starting a new task. ` : "") +
-                (requestHuman ? "When you need missing information or cannot proceed, call request_user_help instead of ending the task with a question. Use handoff for CAPTCHAs, login, and native dialogs; let the user handle them in the browser. Never collect passwords, API keys, or one-time login codes in chat. Re-observe after the user's reply. Routine searching, navigation, clicks, scrolling, form preparation, requested downloads, and requested tab management do not need approval. Clearly labeled consequential buttons are gated by the tool approval check; do not ask twice. Before a consequential action using coordinates, Enter without a labeled ref, or a generic Submit/Confirm control whose effect is consequential, call request_user_help with kind approval and describe the exact consequence. Continue only after approval; prefer a labeled ref when available. " : "") +
+                (requestHuman ? "When you need missing information or cannot proceed, call request_user_help instead of ending with a question. Use handoff for CAPTCHAs, login, native dialogs, and consequential actions whose exact target or effect cannot be verified. Let the user handle them in the browser, then observe the result without repeating the action. Never collect passwords, API keys, or one-time login codes in chat. Routine searching, navigation, clicks, scrolling, form preparation, requested downloads, and requested tab management do not need approval. The browser checks identified consequential controls when you call a tool. If the reviewed page, target, or details change, observe again before proposing another action and use its fresh approval. Prefer a labeled reference to coordinates or Enter. " : "") +
                 "Complete the user's task in browser tabs with access. Web tabs have access by default, except tabs the user revokes in Settings. " +
                 "Use browser_tabs to discover tab IDs; never invent IDs. Plan a short sequence, act, inspect the returned state, and revise when needed. " +
                 "Start with browser_snapshot. Prefer semantic element refs for clicks, filling fields, and selection. " +
@@ -111,11 +117,13 @@ export async function runBrowserAgent(prompt, {
         const input = [...history];
         if (recoveryProgress) input.push({ role: "user", content: "Saved progress for reference: " + JSON.stringify(recoveryProgress) });
         input.push({ role: "user", content: prompt });
+        if (recoveryGuidance) input.push({ role: "user", content: recoveryGuidance });
         try { result = await runner.run(agent, input, {
             maxTurns, signal,
             callModelInputFilter: async ({ modelData }) => {
                 await checkpoint();
                 signal.throwIfAborted();
+                consumeModelTurn();
                 const guidance = getSteering();
                 appliedGuidance.push(...guidance);
                 return { ...modelData, input: [...modelData.input, ...guidance.map(content => ({ role: "user", content }))] };

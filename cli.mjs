@@ -19,7 +19,8 @@ const usage = `Usage: node cli.mjs <command>
   download-local TAB PUBLIC_URL [RELATIVE_FILENAME]
   download-local-status TAB JOB_UUID | download-local-cancel TAB JOB_UUID
   task-list [TAB] | task-schedule TAB PROMPT [DELAY_SECONDS]
-  task-cancel TASK_UUID | task-resume TASK_UUID TAB
+  task-cancel TASK_UUID | task-retry-repeat TASK_UUID
+  task-resume TASK_UUID TAB [keep|run-now|skip] [UPDATED_INSTRUCTIONS]
   pointer TAB '{"screenshotId":"...","x":100,"y":200}'
   command TAB '{"method":"scroll","params":{"deltaY":500,"deltaX":0}}'
 Web tabs have access by default. Revoked and protected tabs are blocked. Refs come from the latest snapshot.`;
@@ -39,12 +40,13 @@ async function main() {
             if (!Number.isSafeInteger(delay) || delay > 30 * 24 * 60 * 60) throw new Error("Delay must be 0–2592000 seconds.");
             method = "task-create";
             payload = { tabId: Number(id), prompt: args[0], mode: "browser", notBefore: Date.now() + delay * 1000 };
-        } else if (input === "task-cancel") {
+        } else if (input === "task-cancel" || input === "task-retry-repeat") {
             if (args.length) throw new Error(usage);
             payload = { taskId: id };
         } else if (input === "task-resume") {
-            if (args.length !== 1 || !validTab(args[0])) throw new Error(usage);
-            payload = { taskId: id, tabId: Number(args[0]) };
+            const [tab, scheduleAction, guidance] = args;
+            if (args.length > 3 || !validTab(tab) || (scheduleAction !== undefined && !["keep", "run-now", "skip"].includes(scheduleAction))) throw new Error(usage);
+            payload = { taskId: id, tabId: Number(tab), ...(scheduleAction ? { scheduleAction } : {}), ...(guidance ? { guidance } : {}) };
         } else throw new Error(usage);
         console.log(JSON.stringify(await requestTask({ method, payload }), null, 2));
         return;

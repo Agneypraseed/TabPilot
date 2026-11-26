@@ -110,6 +110,9 @@
 .specialist-progress p { margin: 8px 0; white-space: pre-wrap; }
 .specialist-progress article + article { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .specialist-progress button + button { margin-inline-start: 6px; }
+#task-recovery label { display: grid; gap: 5px; margin-top: 10px; }
+#task-recovery textarea { width: 100%; padding: 8px 10px; background: var(--surface); resize: vertical; }
+#task-recovery .task-actions button + button { margin-inline-start: 0; }
 .task-heading { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 .task-heading strong { font-size: 13px; line-height: 1.5; min-width: 0; }
 .task-status { color: var(--accent-text); background: var(--selected); border-radius: 6px; padding: 2px 7px; font-size: 10px; flex-shrink: 0; max-width: 43%; text-align: center; }

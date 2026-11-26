@@ -2,7 +2,7 @@ const randomUUID = () => globalThis.crypto.randomUUID();
 import { z } from "zod";
 import { runBrowserAgent } from "./agent-runner.mjs";
 import { createConfiguredModel, DEFAULT_OPENAI_MODEL, formatAgentError } from "./agent-models.mjs";
-import { historyQuery } from "./history-schema.mjs";
+import { historyDeleteQuery, historyQuery } from "./history-schema.mjs";
 import { HumanRequests, ActiveRunBudget } from "./human-requests.mjs";
 const isAbsolute = value => /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(value);
 const defaultDownloadDirectory = () => {
@@ -15,6 +15,8 @@ const providers = { openai: "OPENAI_API_KEY", meta: "META_API_KEY", gemini: "GOO
 const settingsSchema = z.object({
     provider: z.enum(Object.keys(providers)), model: z.string().trim().min(1).max(150),
     maxTurns: z.number().int().min(1).max(100), timeoutMs: z.number().int().min(1000).max(900000),
+    maxTaskTurns: z.number().int().min(1).max(500).default(120), maxTaskActiveMs: z.number().int().min(1000).max(3600000).default(900000),
+    historyRetentionDays: z.number().int().min(0).max(365).default(0),
     approvalMode: z.enum(["important", "every-action"]).default("important"), soundAlerts: z.boolean().default(true),
     downloadDirectory: z.string().trim().min(1).max(1000).refine(value => isAbsolute(value) && !/[\u0000-\u001f\u007f-\u009f]/.test(value), "Choose an absolute local download folder.").default(defaultDownloadDirectory())
 }).strict();
@@ -23,7 +25,7 @@ const startSchema = z.object({ prompt: z.string().trim().min(1).max(12000),
 
 export class AgentService {
     constructor({ env = globalThis.process?.env ?? {}, settings, saveSettings = async () => {}, run = runBrowserAgent, configure = createConfiguredModel, traceStore,
-        sessionId, manageTraceStore = true, runnerOptions = {}, onCheckpoint = async () => {}, allowUnconfiguredSettings = false } = {}) {
+        sessionId, manageTraceStore = true, runnerOptions = {}, onCheckpoint = async () => {}, allowUnconfiguredSettings = false, taskBudget } = {}) {
         this.env = { ...env };
         this.allowUnconfiguredSettings = allowUnconfiguredSettings;
         this.settings = settingsSchema.parse(settings ?? {
@@ -36,6 +38,7 @@ export class AgentService {
         this.listeners = new Set();
         this.sessionId = sessionId ?? randomUUID();
         this.runnerOptions = runnerOptions;
+        this.taskBudget = taskBudget;
         this.onCheckpoint = onCheckpoint;
         this.traceStore = traceStore;
         this.historyListeners = new Set();
@@ -60,7 +63,7 @@ export class AgentService {
         }
     }
     snapshot() {
-        return { ...this.state, requests: this.humanRequests.list(), historyRevision: this.traceStore?.revision ?? 0, historyAvailable: !!this.traceStore, historyWarning: this.historyWarning, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
+        return { ...this.state, requests: this.humanRequests.list(), historyRevision: this.traceStore?.revision ?? 0, historyAvailable: !!this.traceStore, historyCanDelete: typeof this.traceStore?.remove === "function", historyWarning: this.historyWarning, sessionId: this.sessionId, revision: this.revision, settings: { ...this.settings }, providers: Object.entries(providers).map(([id, key]) => ({ id, configured: Boolean(this.env[key]?.trim()) })) };
     }
     subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
     subscribeHistory(listener) { this.historyListeners.add(listener); return () => this.historyListeners.delete(listener); }
@@ -130,6 +133,11 @@ export class AgentService {
             const operation = { "history-list": "list", "history-events": "events", "history-image": "artifact" }[method];
             return { history: await this.traceStore[operation](query) };
         }
+        if (method === "history-delete") {
+            const query = historyDeleteQuery.parse(payload);
+            if (!this.traceStore?.remove) throw new Error("History deletion is unavailable in this runtime.");
+            return { history: await this.traceStore.remove(query) };
+        }
         if (method === "settings") {
             if (this.active) throw new Error("Stop the current run before changing model settings.");
             const next = settingsSchema.parse(payload);
@@ -195,16 +203,24 @@ export class AgentService {
         let configured;
         const traceContext = this.traceContext;
         const controller = this.controller;
-        const budget = this.budget = new ActiveRunBudget(this.settings.timeoutMs, () => controller.abort(new Error("Run active-time limit reached.")));
+        const { taskBudget } = this;
+        const budget = this.budget = new ActiveRunBudget(this.settings.timeoutMs, () => controller.abort(new Error("Run active-time limit reached.")),
+            active => taskBudget?.track(controller, active));
+        const abortTask = () => controller.abort(taskBudget.signal.reason);
+        taskBudget?.signal.addEventListener("abort", abortTask, { once: true });
+        if (taskBudget?.signal.aborted) abortTask();
+        this.lastResult = undefined;
         try {
             await this.traceReady;
+            controller.signal.throwIfAborted();
             configured = await this.configureModel({ ...this.env, AGENT_PROVIDER: this.settings.provider, AGENT_MODEL: this.settings.model });
             this.controller.signal.throwIfAborted();
             const options = typeof this.runnerOptions === "function" ? this.runnerOptions(this) : this.runnerOptions;
             const result = await this.runAgent(input.prompt, {
                 ...options,
                 model: configured.model, modelSettings: configured.modelSettings, targetTabId: input.tabId, mode: input.mode,
-                maxTurns: this.settings.maxTurns, signal: this.controller.signal, history: this.history,
+                maxTurns: taskBudget ? Math.min(this.settings.maxTurns, taskBudget.turns) : this.settings.maxTurns,
+                consumeModelTurn: () => taskBudget?.consumeTurn(), signal: this.controller.signal, history: this.history,
                 traceContext,
                 requestHuman: request => this.requestHuman(request), approvalMode: this.settings.approvalMode,
                 downloadDirectory: this.settings.downloadDirectory,
@@ -239,6 +255,7 @@ export class AgentService {
         } finally {
             const finalStatus = this.state.status;
             budget.stop();
+            taskBudget?.signal.removeEventListener("abort", abortTask);
             try { await configured?.close(); } catch { /* Runtime outcome already reported. */ }
             if (traceContext) await this.traceStore.finish(traceContext, finalStatus).catch(error => this.traceFailure(error));
             this.emit();

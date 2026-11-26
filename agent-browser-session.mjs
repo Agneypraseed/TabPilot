@@ -15,14 +15,15 @@ export function observedBrowserServer(server, {
         }
         const decision = await beforeTool(name, args);
         await checkpoint(); signal?.throwIfAborted();
-        if (decision) return decision;
+        if (decision?.isError) return decision;
         if (hasSteering()) return { isError: true, content: [{ type: "text", text: "The user sent new guidance while this action was waiting. Reconsider it before acting." }] };
         const activityId = globalThis.crypto.randomUUID();
         const targetName = elements.get(args?.tabId)?.find(element => element.ref === args?.ref)?.name;
         const activity = { tool: name, activityId, ...(targetName ? {targetName: targetName.slice(0,120)} : {}) };
         onActivity({ ...activity, phase: "running" });
         let result;
-        try { result = await server.callToolResult(name, args, meta, { ...options, signal }); }
+        try { result = await server.callToolResult(name, args, meta, { ...options, signal,
+            ...(decision?.approval ? { approval: decision.approval } : {}) }); }
         catch(error) {
             onActivity({...activity,phase:signal?.aborted ? "stopped" : "error",error:String(error.message ?? "The browser step did not finish.").slice(0,1200)});
             throw error;

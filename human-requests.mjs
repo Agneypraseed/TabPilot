@@ -94,9 +94,10 @@ export class HumanRequests {
 // Charge only active execution time. Human handoffs may take longer than a model
 // stage without spending tokens or causing the waiting task to silently expire.
 export class ActiveRunBudget {
-  constructor(milliseconds, onExpire) {
+  constructor(milliseconds, onExpire, onActivity = () => {}) {
     this.remaining = milliseconds;
     this.onExpire = onExpire;
+    this.onActivity = onActivity;
     this.holds = 0;
     this.resume();
   }
@@ -107,6 +108,7 @@ export class ActiveRunBudget {
         0,
         this.remaining - (Date.now() - this.started),
       );
+      this.onActivity(false);
     }
   }
   resume() {
@@ -114,8 +116,41 @@ export class ActiveRunBudget {
     this.started = Date.now();
     clearTimeout(this.timer);
     this.timer = setTimeout(this.onExpire, this.remaining);
+    this.onActivity(true);
   }
   stop() {
     clearTimeout(this.timer);
+    this.onActivity(false);
   }
+}
+
+export class TaskBudget {
+  constructor(turns, milliseconds) {
+    this.turns = turns;
+    this.controller = new AbortController();
+    this.signal = this.controller.signal;
+    this.stages = new Set();
+    this.time = new ActiveRunBudget(milliseconds, () => this.exhaust("Task active-time limit reached."));
+    this.time.suspend();
+  }
+  track(stage, active) {
+    if (this.signal.aborted) return;
+    const wasActive = this.stages.size > 0;
+    if (active) this.stages.add(stage);
+    else this.stages.delete(stage);
+    const isActive = this.stages.size > 0;
+    if (isActive && !wasActive) this.time.resume();
+    if (!isActive && wasActive) this.time.suspend();
+  }
+  consumeTurn() {
+    if (this.turns === 0) this.exhaust("Task model turn limit reached.");
+    this.signal.throwIfAborted();
+    this.turns--;
+  }
+  exhaust(message) {
+    this.time.stop();
+    this.stages.clear();
+    this.controller.abort(new Error(message));
+  }
+  close() { this.time.stop(); }
 }

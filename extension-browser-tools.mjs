@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { actionParameters, commandDescriptions, mcpActionName } from "./commands.mjs";
+import { actionParameters, approvalContextParameters, commandDescriptions, mcpActionName } from "./commands.mjs";
 
 // The Agents SDK accepts this in-process tool server. All operations go to the
 // extension worker; there is no HTTP bridge or child process in this adapter.
@@ -19,6 +19,13 @@ export function createExtensionBrowserTools({ request, onToolResult = async () =
             return [...operations.entries()].map(([name, operation]) => ({ name, description: operation.description,
                 inputSchema: z.toJSONSchema(operation.schema, { target: "draft-7", unrepresentable: "any" }) }));
         },
+        async inspectApproval(name, args, { signal } = {}) {
+            signal?.throwIfAborted();
+            const operation = operations.get(name);
+            if (!operation) throw new Error("Unknown browser action.");
+            const { tabId, ...params } = operation.schema.parse(args);
+            return request("approval-context", tabId, approvalContextParameters.parse({ action: { method: operation.method, params } }), { signal });
+        },
         async callToolResult(name, args = {}, _meta, options = {}) {
             let result;
             try {
@@ -26,7 +33,7 @@ export function createExtensionBrowserTools({ request, onToolResult = async () =
                 const operation = operations.get(name);
                 if (!operation) throw new Error("Unknown extension browser tool.");
                 const { tabId, ...params } = operation.schema.parse(args ?? {});
-                const data = await request(operation.method, tabId, params, { signal: options.signal });
+                const data = await request(operation.method, tabId, params, { signal: options.signal, ...(options.approval ? { approval: options.approval } : {}) });
                 if (operation.method === "screenshot") {
                     const { data: image, ...metadata } = data;
                     result = { content: [{ type: "text", text: JSON.stringify(metadata) },

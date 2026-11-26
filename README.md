@@ -22,9 +22,11 @@ Choose **Settings → Appearance** to switch between white Light, light Green, b
 
 Web tabs have access by default. Revoke individual tabs under **Settings → Tab access**. Browser-protected pages and the Chrome Web Store are unavailable. CAPTCHA challenges, logins, and native dialogs can require a user handoff.
 
-Keep Chrome running for schedules. Closing the workspace does not stop a task, but browser exit or extension reload interrupts active work. Review interrupted work before resuming. Scheduled work cannot execute while Chrome is closed; missed schedules are checked when the extension next runs. After a browser restart, review saved tasks and bind them to their current tabs before resuming. Session-only credentials must be entered again.
+Keep Chrome running for schedules. Closing the workspace leaves tasks running. After a browser restart, review saved schedules and choose their tabs. Rebinding a future schedule keeps its start time and repeat interval. For a missed start, choose **Run now** or **Skip missed run**. Skipping a recurring task schedules its next interval. If TabPilot could not save a repeat after a verified completion, **Retry scheduling** in Tasks saves the next occurrence while preserving the completed result. Session-only credentials must be entered again after browser exit.
 
-The **Agent** chat shows live coordinator and specialist progress. When the task finishes, the chat keeps the final reply. Open **History** or use **View trace** in **Tasks** for verification details. After a restart or a lost connection, open **History → Review before continuing**. Review the last recorded step and trace, select an enabled tab, then choose **Continue on selected tab**. TabPilot returns to Agent, starts a fresh run, and requires a new page snapshot before browser actions.
+The **Agent** chat shows coordinator and specialist progress and keeps the final reply. Each panel follows its selected tab and run. Scheduled jobs start with independent context. Open **History** or use **View trace** in **Tasks** for verification details.
+
+After a restart or lost connection, **Review and resume** in Tasks opens **History → Review before continuing**. Check the last recorded step, choose an enabled tab, and add any updated instructions before continuing. The new run requires a fresh page snapshot before browser actions. In **Settings → Advanced settings**, you can set separate stage and task limits. The task limits cover all stages and specialists, and repeated stages without new browser evidence pause for review.
 
 ## Optional developer server, CLI, and MCP
 
@@ -74,9 +76,9 @@ TABPILOT_EMAIL_TO=
 
 Use **Settings → Telegram → Send test alert** to check the saved destination without a model call. Pending question cards show whether each provider accepted or rejected its alert; acceptance still requires checking the receiving app.
 
-Task checkpoints, History and images use the browser’s IndexedDB storage. Earlier Chrome-local records are copied safely on upgrade and retained as a backup. Storage failures preserve saved records and report a warning. Credentials remain in the selected Chrome session/local settings storage.
+Task checkpoints, History and images use the browser’s IndexedDB storage. Earlier Chrome-local records are copied safely on upgrade and retained as a backup until deleted. Open a finished run in **History → Runs** and choose **Delete run** to delete its saved events and screenshots. To delete older finished runs automatically for this browser profile and execution mode, choose a retention period in **Settings → Advanced settings**. Credentials remain in the selected Chrome session/local settings storage.
 
-Permission alerts lead with the proposed action and its context. When available, this includes the page, visible recipient and message subject; full message bodies and task prompts are not copied automatically. Internal request IDs stay in TabPilot.
+Permission alerts describe the proposed action and its context, including the page and available details such as recipient, subject, or amount. TabPilot verifies that the reviewed action still matches the page when it is about to execute. If relevant details changed, review the new action. TabPilot asks you to handle consequential actions in the browser when it cannot determine the exact target or effect. Full message bodies and task prompts are not copied automatically.
 
 Alerts report pending requests and verified coordinator completion; repeating tasks notify for each successful occurrence. They contain task summaries or help questions and relevant approval details. Notifications leave your device for Telegram or Resend. They do not include a screenshot or full task history.
 

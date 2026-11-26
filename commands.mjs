@@ -39,8 +39,15 @@ export const actionParameters = {
         x: z.number().nonnegative(), y: z.number().nonnegative(), toX: z.number().nonnegative().optional(), toY: z.number().nonnegative().optional(),
         button: z.enum(["left", "right", "middle"]).optional(), clickCount: z.number().int().min(1).max(2).optional() }).strict()
 };
-export const commandSchema = z.discriminatedUnion("method", Object.entries(actionParameters)
-    .map(([method, params]) => z.object({ method: z.literal(method), ...tab, params }).strict()));
+const approvalToken = z.string().uuid();
+const browserAction = z.discriminatedUnion("method", Object.entries(actionParameters)
+    .map(([method, params]) => z.object({ method: z.literal(method), params }).strict()));
+export const approvalContextParameters = z.object({ action: browserAction, approval: approvalToken.optional() }).strict();
+export const commandSchema = z.discriminatedUnion("method", [
+    ...Object.entries(actionParameters).map(([method, params]) =>
+        z.object({ method: z.literal(method), ...tab, params, approval: approvalToken.optional() }).strict()),
+    z.object({ method: z.literal("approval-context"), ...tab, params: approvalContextParameters }).strict()
+]);
 
 export const parseBrowserCommand = value => commandSchema.parse(value);
 

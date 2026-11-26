@@ -24,6 +24,30 @@ test("repeat schedules only after successful completion and canceling the next o
     assert.equal(ui.records.get(next.id).status, "cancelled");
     await ui.manager.close();
 });
+test("failure to save the next occurrence leaves the verified result and retries without another model call", async t => {
+    let calls = 0, fail = true;
+    const ui = setup(async (_prompt, options) => { calls++; return complete(options); });
+    t.after(() => ui.manager.close());
+    const save = ui.manager.store.upsert;
+    ui.manager.store.upsert = async record => {
+        if (fail && record.seriesId) throw new Error("Storage unavailable");
+        return save(record);
+    };
+    await ui.manager.connected({ scope: ui.scope });
+    await ui.create({ repeatEveryMs: 60000 });
+    await until(() => !ui.manager.active && ui.manager.snapshot().jobs[0]?.repeatScheduleFailed);
+    const [completed] = [...ui.records.values()];
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.evidence, "Observed current title and content");
+    await assert.rejects(ui.manager.command("task-retry-repeat", { taskId: completed.id }), /Storage unavailable/);
+    fail = false;
+    ui.advance(70000);
+    await ui.manager.command("task-retry-repeat", { taskId: completed.id });
+    const next = ui.manager.snapshot().jobs.find(job => job.id === completed.nextOccurrenceId);
+    assert.equal(next.scheduleNeedsReview, true);
+    assert.equal(calls, 1);
+    await assert.rejects(ui.manager.command("task-retry-repeat", { taskId: completed.id }), /no repeat/i);
+});
 test("stopping coordinator during child persistence cannot launch the new specialist", async () => {
     let release, blocked = false, childCalls = 0;
     const barrier = new Promise(resolve => { release = resolve; });
@@ -201,10 +225,75 @@ test("turn/final-answer limits continue with tool history and never claim comple
     await ui.manager.close();
 });
 
+test("task turn budget survives stage transitions and repeated observations trigger review", async t => {
+    let stageCalls = 0;
+    const limited = setup(async (_prompt, options) => {
+        stageCalls++;
+        options.consumeModelTurn();
+        return { answer: "More work is needed", history: [] };
+    });
+    t.after(() => limited.manager.close());
+    await limited.manager.connected({ scope: limited.scope });
+    await limited.manager.command("settings", { ...limited.manager.preferences.settings, maxTaskTurns: 2 });
+    await limited.create({ maxStages: 20 });
+    await until(() => !limited.manager.active);
+    assert.equal(stageCalls, 2);
+    const [paused] = [...limited.records.values()];
+    assert.equal(paused.status, "paused");
+    assert.match(paused.summary, /task model turn limit/i);
+
+    const repeating = setup(async (_prompt, options) => {
+        options.consumeModelTurn();
+        options.onBrowserEvidence("browser_snapshot", {
+            url: "https://example.test/", text: "The same result", snapshotId: randomUUID(),
+            elements: [{ name: "Continue", role: "button", ref: randomUUID() }],
+        });
+        return { answer: "More work is needed", history: [] };
+    });
+    t.after(() => repeating.manager.close());
+    await repeating.manager.connected({ scope: repeating.scope });
+    await repeating.create({ maxStages: 20 });
+    await until(() => !repeating.manager.active);
+    const [stalled] = [...repeating.records.values()];
+    assert.equal(stalled.status, "paused");
+    assert.equal(stalled.stage, 4, "First observation contributes evidence; subsequent identical observations do not");
+    assert.match(stalled.summary, /no new browser evidence/i);
+});
+
+test("scheduled jobs keep separate chat context and panels scope controls to their own run", async t => {
+    const inputHistory = new Map();
+    const ui = setup(async (prompt, options) => {
+        inputHistory.set(prompt, options.history);
+        return complete(options);
+    });
+    t.after(() => ui.manager.close());
+    await ui.manager.connected({ scope: ui.scope });
+    const view = { tabId: 12 };
+    const other = { tabId: 34 };
+    await ui.manager.command("start", { prompt: "Previous chat", tabId: 12, view });
+    await until(() => !ui.manager.active);
+    const original = await ui.manager.command("state", { view });
+    ui.advance(1);
+    const afterSchedule = await ui.manager.command("task-create", { prompt: "Independent task", tabId: 12, notBefore: 2000, view });
+    assert.equal(afterSchedule.runId, original.runId);
+    await ui.manager.command("start", { prompt: "Other tab conversation", tabId: 34, view: other });
+    await until(() => !ui.manager.active);
+    assert.equal((await ui.manager.command("state", { view })).runId, original.runId);
+    await assert.rejects(ui.manager.command("stop", { runId: original.runId, view: other }), /no longer selected/i);
+    ui.advance(1000);
+    await ui.manager.tick();
+    await until(() => !ui.manager.active);
+    assert.deepEqual(inputHistory.get("Independent task"), []);
+    assert.equal((await ui.manager.command("state", { view })).runId, original.runId);
+    await ui.manager.command("start", { prompt: "Chat follow-up", tabId: 12, view });
+    await until(() => !ui.manager.active);
+    assert.equal(inputHistory.get("Chat follow-up")?.[0]?.content, "Read page");
+});
+
 test("rotated tab namespace requires explicit rebind and isolates other browser profiles", async () => {
     const ui = setup(async (_prompt, options) => complete(options));
     await ui.manager.connected({ scope: ui.scope, profileId: ui.profileId });
-    await ui.create({ notBefore: 9000 });
+    await ui.create({ notBefore: 9000, repeatEveryMs: 60000 });
     const old = [...ui.records.values()][0];
     await ui.manager.connected({ scope: randomUUID(), profileId: ui.profileId });
     assert.equal(ui.manager.snapshot().jobs[0].needsRebind, true);
@@ -213,10 +302,29 @@ test("rotated tab namespace requires explicit rebind and isolates other browser 
     const rebound = [...ui.records.values()].find(record => record.resumedFrom === old.id);
     assert.equal(rebound.tabId, 34);
     assert.notEqual(rebound.scope, old.scope);
+    assert.equal(rebound.notBefore, 9000);
+    assert.equal(rebound.repeatEveryMs, 60000);
+    assert.equal(rebound.status, "scheduled");
     assert.equal(ui.records.get(old.id).status, "cancelled");
     await ui.manager.connected({ scope: randomUUID(), profileId: randomUUID() });
     assert.equal(ui.manager.snapshot().jobs.length, 0);
     await ui.manager.close();
+});
+test("rebound overdue schedules require an explicit choice and can skip to the next interval", async t => {
+    let calls = 0;
+    const ui = setup(async (_prompt, options) => { calls++; return complete(options); });
+    t.after(() => ui.manager.close());
+    await ui.manager.connected({ scope: ui.scope, profileId: ui.profileId });
+    await ui.create({ notBefore: 5000, repeatEveryMs: 60000 });
+    const [old] = [...ui.records.values()];
+    ui.advance(75000);
+    await ui.manager.connected({ scope: randomUUID(), profileId: ui.profileId });
+    await assert.rejects(ui.manager.command("task-resume", { taskId: old.id, tabId: 34 }), /overdue/i);
+    await ui.manager.command("task-resume", { taskId: old.id, tabId: 34, scheduleAction: "skip" });
+    const next = [...ui.records.values()].find(record => record.resumedFrom === old.id);
+    assert.equal(next.notBefore, 125000);
+    assert.equal(next.repeatEveryMs, 60000);
+    assert.equal(calls, 0);
 });
 
 test("coordinator opens accessible research tabs without approval and collects real worker results", async () => {

@@ -28,6 +28,31 @@ const secret='test-provider-key-not-for-display';
 const settings={provider:'openai',model:'test-model',maxTurns:8,timeoutMs:60000,approvalMode:'important',soundAlerts:false,downloadDirectory:'/browser/downloads'};
 async function until(check){for(let n=0;n<500;n++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('Task did not settle');}
 
+test('History deletion and saved retention are scoped to the current browser profile',async t=>{
+ const f=fixture();
+ const database=new ExtensionDatabaseStorage({indexedDB:new IDBFactory(),name:'retention-'+randomUUID()});
+ const runtime=await createExtensionRuntime({...f,dataStorage:database});t.after(()=>runtime.close());
+ const olderScope=randomUUID(),otherScope=randomUUID(),otherProfile=randomUUID();
+ const trace=runtime.manager.traceStore;
+ await trace.rememberScope(olderScope,f.profileId);
+ await trace.rememberScope(otherScope,otherProfile);
+ const oldTime=Date.now()-45*24*60*60*1000;
+ const seed=async(scope,startedAt=oldTime)=>{
+  const runId=randomUUID(),tabId=12;
+  await database.set({[trace.path(scope,tabId,runId)+'meta']:{scope,tabId,runId,startedAt,status:'completed'}});
+  return {scope,tabId,runId};
+ };
+ const previous=await seed(olderScope),foreign=await seed(otherScope),active=await seed(f.scope,Date.now());
+ await runtime.command('settings',{...settings,historyRetentionDays:30});
+ await until(()=>runtime.manager.nextHistoryCleanup>Date.now());
+ assert.equal(f.data.local.extensionAgentSettings.historyRetentionDays,30);
+ assert.equal((await trace.list(previous)).runs.length,0);
+ assert.equal((await trace.list(foreign)).runs.length,1);
+ await assert.rejects(runtime.command('history-delete',foreign),/different browser session/);
+ assert.equal((await runtime.command('history-delete',{tabId:active.tabId,runId:active.runId})).history.deleted,true);
+ assert.deepEqual((await runtime.command('history-list',{tabId:12})).history.runs,[]);
+});
+
 test('extension starts without a server, keeps keys session-only by default, never returns credentials',async t=>{
  const f=fixture();const runtime=await createExtensionRuntime(f);t.after(()=>runtime.close());
  assert.equal(runtime.snapshot().executionMode,'extension');
@@ -167,6 +192,11 @@ test('restart keeps the old trace, requires a fresh snapshot, and continues on t
  const next=await createExtensionRuntime({...reopened,profileId:f.profileId,configure:()=>config(model),rpc:async(operation,payload)=>{
   if(operation!=='browser')return reopened.rpc(operation,payload);
   if(payload.method==='tabs')return [{id:34,title:'New target'}];
+  if(payload.method==='approval-context') {
+   assert.deepEqual(payload.params.action,{method:'click',params:{ref:'fresh'}});
+   return {token:old.runId,label:'Open fixture detail',ambiguous:false};
+  }
+  if(payload.method==='click')assert.equal(payload.approval,old.runId);
   tools.push(payload.method);
   return {title:'New target',url:'https://example.test/',elements:[]};
  }});t.after(()=>next.close());
@@ -280,35 +310,55 @@ test('a direct private Telegram reply resolves only the matching live approval',
  const f=fixture();
  const chat={id:12345,type:'private'};
  const from={id:12345,is_bot:false};
+ const token=randomUUID();
+ let turns=0, clicks=0;
+ const call=(name,args)=>({usage:new Usage({requests:1}),output:[{type:'function_call',callId:'telegram-'+turns,name,arguments:JSON.stringify(args)}]});
+ const model={async getResponse(){
+  turns++;
+  if(turns===1)return call('browser_snapshot',{tabId:12});
+  if(turns===2)return call('browser_click',{tabId:12,ref:'fixture-action'});
+  if(turns===3)return call('complete_task',{summary:'Approved',evidence:'Fixture acted after approval'});
+  return {usage:new Usage({requests:1}),output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'Done'}]}]};
+ },async *getStreamedResponse(){}};
+ const rpc=async(operation,payload)=>{
+  if(operation!=='browser')return f.rpc(operation,payload);
+  if(payload.method==='snapshot')return {title:'Fixture',url:'https://example.com/',elements:[{ref:'fixture-action',name:'Publish fixture',role:'button'}]};
+  if(payload.method==='approval-context') {
+   assert.deepEqual(payload.params.action,{method:'click',params:{ref:'fixture-action'}});
+   return {token,title:'Fixture',site:'example.com',label:'Publish fixture',ambiguous:false};
+  }
+  if(payload.method==='click') {
+   assert.equal(payload.approval,token);
+   clicks++;
+   return {clicked:true};
+  }
+  return f.rpc(operation,payload);
+ };
  const reply=(update_id, overrides={})=>({update_id,message:{chat,from,text:'OK',reply_to_message:{message_id:10},...overrides}});
  let updates=[reply(1,{chat:{id:12345,type:'group'}}),reply(2,{from:{id:42,is_bot:false}}),
      reply(3,{reply_to_message:undefined}),reply(4,{reply_to_message:{message_id:9}}),reply(5,{text:'OK to do something else'})];
  const offsets=[];
- const runtime=await createExtensionRuntime({...f,notificationFetch:async(url,options)=>{
+ const runtime=await createExtensionRuntime({...f,rpc,notificationFetch:async(url,options)=>{
    const body=JSON.parse(options.body);
    if(url.endsWith('/getUpdates')) {
     offsets.push(body.offset);
     return Response.json({ok:true,result:updates});
    }
-   if(body.text.includes('Approve the fixture action?')) {
+   if(body.text.includes('Publish fixture')) {
     assert.equal(body.reply_markup.force_reply,true);
     assert.match(body.text,/Reply directly to this alert with OK to approve this action/);
     assert.doesNotMatch(body.text,/Open TabPilot|does not approve/);
     return Response.json({ok:true,result:{message_id:10,chat}});
    }
    return Response.json({ok:true,result:{message_id:11,chat}});
- },configure:async()=>({model:{},modelSettings:{},close:async()=>{}}),run:async(_prompt,options)=>{
-   const response=await options.requestHuman({kind:'approval',question:'Approve the fixture action?'});
-   assert.equal(response.decision,'approve');
-   await options.extraTools.find(tool=>tool.name==='complete_task').invoke(new RunContext(),JSON.stringify({summary:'Approved',evidence:'Fixture acted after approval'}));
-   return {answer:'Done',history:[]};
- }});t.after(()=>runtime.close());
+ },configure:async()=>({model,modelSettings:{},close:async()=>{}})});t.after(()=>runtime.close());
  clearInterval(runtime.manager.timer);
  await runtime.command('runtime-configure',{credentials:{OPENAI_API_KEY:secret,TELEGRAM_BOT_TOKEN:'123456:test-token-fixture',TABPILOT_TELEGRAM_CHAT_ID:'12345'}});
  await runtime.command('start',{prompt:'Ask before acting',tabId:12,mode:'browser',maxStages:1,allowResearch:false});
  await until(()=>runtime.snapshot().notificationDeliveries.some(item=>item.results[0]?.accepted));
  await runtime.manager.pollTelegram();
  assert.equal(runtime.snapshot().requests.length,1);
+ assert.equal(clicks,0);
  updates=[reply(6,{text:' ok '})];
  runtime.manager.telegramPollAfter=0;
  await runtime.manager.pollTelegram();
@@ -316,6 +366,7 @@ test('a direct private Telegram reply resolves only the matching live approval',
  assert.deepEqual(offsets,[undefined,6]);
  assert.equal(runtime.snapshot().requests.length,0);
  assert.equal(runtime.snapshot().jobs[0].status,'completed');
+ assert.equal(clicks,1);
 });
 
 test('Telegram settings test reports invalid configuration without a network send',async t=>{
@@ -367,6 +418,7 @@ for(const gate of ['help','browser-action'])test(`real SDK denial at ${gate} end
  const f=fixture();let turns=0,actions=0;
  const rpc=async(operation,payload)=>{
   if(operation==='browser'&&payload.method==='snapshot')return {title:'Test page',url:'https://example.com',text:'Send report',truncated:false,elements:[{ref:'send',name:'Send report',role:'button'}]};
+  if(operation==='browser'&&payload.method==='approval-context')return {token:randomUUID(),title:'Test page',site:'example.com',label:'Send report',ambiguous:false};
   if(operation==='browser'&&payload.method==='click'){actions++;return {clicked:true};}
   return f.rpc(operation,payload);
  };

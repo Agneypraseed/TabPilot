@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { historyQuery } from "./history-schema.mjs";
+import { historyDeleteQuery, historyExpireQuery, historyQuery, historyScopeConflict } from "./history-schema.mjs";
 export { historyQuery } from "./history-schema.mjs";
 export { taskInputSchema } from "./task-schema.mjs";
 
@@ -76,14 +76,22 @@ export class ExtensionTaskStore {
   }
 }
 
-const metaSchema = z.object({ scope: uuid, tabId: integer, runId: uuid, startedAt: integer, status: z.string() }).passthrough();
-const eventsSchema = z.array(z.object({ id: uuid, time: integer }).passthrough());
+const metaSchema = z.object({
+  scope: uuid, tabId: integer, runId: uuid, startedAt: integer, endedAt: integer.optional(),
+  status: z.string(), eventCount: integer.optional()
+}).passthrough();
+const eventSchema = z.object({ id: uuid, time: integer }).passthrough();
+const eventsSchema = z.array(eventSchema);
 const artifactSchema = z.object({ data: z.string(), mimeType: z.enum(["image/png", "image/jpeg"]) }).strict();
 
 export class ExtensionTraceHistory {
-  constructor(storage, { env = {}, secrets = [], key = "extension.history.v1.", maxBytes = 8 * 1024 * 1024 } = {}) {
+  constructor(storage, { env = {}, secrets = [], key = "extension.history.v1.",
+    maxBytes = storage?.kind === "indexeddb" ? Infinity : 8 * 1024 * 1024, legacyStorage } = {}) {
     validateStorage(storage);
     this.storage = storage; this.key = key; this.maxBytes = maxBytes;
+    this.queueKey = storage.historyQueueKey ?? storage;
+    this.legacyStorage = legacyStorage;
+    this.incremental = storage.kind === "indexeddb";
     this.env = { ...env, ...Object.fromEntries(secrets.map((value, index) => [`HISTORY_${index}_SECRET`, value])) };
     this.revision = 0;
   }
@@ -103,27 +111,57 @@ export class ExtensionTraceHistory {
     uuid.parse(scope); integer.parse(tabId);
     return `${this.key}${scope}.tab-${tabId}.` + (runId ? `${uuid.parse(runId)}.` : "");
   }
+  rememberScope(scope, profileId) {
+    return queue(this.queueKey, async () => {
+      const browserScope = uuid.parse(scope).toLowerCase(), profile = uuid.parse(profileId).toLowerCase();
+      const ownerKey = this.key + "scope-owner." + browserScope;
+      const profileKey = this.key + "profile-scopes." + profile;
+      const records = await this.storage.get([ownerKey, profileKey]);
+      const owner = uuid.optional().parse(records[ownerKey]);
+      if (owner && owner !== profile) throw historyScopeConflict();
+      const scopes = z.array(uuid).parse(records[profileKey] ?? []);
+      if (owner === profile && scopes.includes(browserScope)) return;
+      await this.write({ [ownerKey]: profile, [profileKey]: [...new Set([...scopes, browserScope])] });
+    });
+  }
+  scopesForProfile(profileId) {
+    return queue(this.queueKey, async () => {
+      const profile = uuid.parse(profileId).toLowerCase(), profileKey = this.key + "profile-scopes." + profile;
+      const scopes = z.array(uuid).parse((await this.storage.get(profileKey))[profileKey] ?? []);
+      if (!scopes.length) return scopes;
+      const ownerKey = scope => this.key + "scope-owner." + scope;
+      const owners = await this.storage.get(scopes.map(ownerKey));
+      return scopes.filter(scope => owners[ownerKey(scope)] === profile);
+    });
+  }
   // Writes include images, events and metadata in one call. Reject at the
   // namespace limit before touching existing data; storage failures propagate.
   async write(updates) {
-    const all = await this.storage.get(null);
-    const own = Object.fromEntries(Object.entries(all).filter(([key]) => key.startsWith(this.key)));
-    const next = { ...own, ...json(updates) };
-    if (bytes(next) > this.maxBytes) throw new Error("Extension history storage is full. Existing history has been preserved.");
+    if (Number.isFinite(this.maxBytes)) {
+      const all = await this.storage.get(null);
+      const own = Object.fromEntries(Object.entries(all).filter(([key]) => key.startsWith(this.key)));
+      const next = { ...own, ...json(updates) };
+      if (bytes(next) > this.maxBytes) throw new Error("Extension history storage is full. Existing history has been preserved.");
+    }
     await this.storage.set(updates);
   }
   start(record) {
-    return queue(this.storage, async () => {
+    return queue(this.queueKey, async () => {
       const path = this.path(record.scope, record.tabId, record.runId);
       if ((await this.storage.get(path + "meta"))[path + "meta"] !== undefined) throw new Error("History run already exists.");
-      const meta = metaSchema.parse(this.clean({ ...record, task: record.task?.slice(0, 200), startedAt: Date.now(), status: "running" }));
-      await this.write({ [path + "meta"]: json(meta), [path + "events"]: [] });
+      const meta = metaSchema.parse(this.clean({ ...record, bridgeSessionId: record.bridgeSessionId ?? this.bridgeSessionId,
+        task: record.task?.slice(0, 200), startedAt: Date.now(),
+        status: "running", eventCount: this.incremental ? 0 : undefined }));
+      const updates = { [path + "meta"]: json(meta) };
+      if (!this.incremental) updates[path + "events"] = [];
+      await this.write(updates);
       this.changed(); return clone(meta);
     });
   }
-  async getRun(context) {
+  async getRun(context, { missing = false } = {}) {
     const path = this.path(context.scope, context.tabId, context.runId);
     const raw = (await this.storage.get(path + "meta"))[path + "meta"];
+    if (raw === undefined && missing) return null;
     if (raw === undefined) throw new Error("History run not found for this tab.");
     const run = metaSchema.parse(clone(raw));
     if (run.scope !== context.scope || run.tabId !== context.tabId || run.runId !== context.runId) throw new Error("History identity does not match its storage key.");
@@ -134,8 +172,8 @@ export class ExtensionTraceHistory {
     return stored === undefined ? [] : eventsSchema.parse(clone(stored));
   }
   append(context, event) {
-    return queue(this.storage, async () => {
-      await this.getRun(context);
+    return queue(this.queueKey, async () => {
+      const run = await this.getRun(context);
       const path = this.path(context.scope, context.tabId, context.runId), updates = {};
       const extract = value => {
         if (value && typeof value === "object" && typeof value.data === "string" && /^image\/(jpeg|png)$/.test(value.mimeType)) {
@@ -148,50 +186,72 @@ export class ExtensionTraceHistory {
         if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, extract(item)]));
         return value;
       };
-      const next = this.clean(extract({ id: crypto.randomUUID(), time: Date.now(), ...clone(event) }));
-      const events = await this.readEvents(path);
-      updates[path + "events"] = eventsSchema.parse(json([...events, next]));
+      const next = eventSchema.parse(json(this.clean(extract({ id: crypto.randomUUID(), time: Date.now(), ...clone(event) }))));
+      if (run.eventCount === undefined) {
+        const events = await this.readEvents(path);
+        updates[path + "events"] = [...events, next];
+      } else {
+        updates[path + "event." + run.eventCount] = next;
+        updates[path + "meta"] = { ...run, eventCount: run.eventCount + 1 };
+      }
       await this.write(updates); this.changed();
     });
   }
   finish(context, status) {
-    return queue(this.storage, async () => {
+    return queue(this.queueKey, async () => {
       const path = this.path(context.scope, context.tabId, context.runId), run = await this.getRun(context);
       await this.write({ [path + "meta"]: { ...run, status: z.string().parse(status), endedAt: Date.now() } });
       this.changed();
     });
   }
   recovered(run) { return { ...run, status: run.status === "running" && run.bridgeSessionId !== this.bridgeSessionId ? "interrupted" : run.status }; }
+  async metadata(scope, tabId, storage = this.storage) {
+    const prefix = tabId === undefined ? this.key + uuid.parse(scope) + "." : this.path(scope, tabId);
+    const entries = storage.historyMetadata
+      ? await storage.historyMetadata(prefix, scope, tabId)
+      : Object.entries(await storage.get(null)).filter(([key]) => key.startsWith(prefix) && key.endsWith(".meta"));
+    return entries.map(([key, raw]) => {
+      const run = metaSchema.parse(raw);
+      if (run.scope !== scope || (tabId !== undefined && run.tabId !== tabId) ||
+        key !== this.path(scope, run.tabId, run.runId) + "meta") throw new Error("History identity does not match its storage key.");
+      return run;
+    });
+  }
   list(query) {
-    return queue(this.storage, async () => {
-      const { scope, tabId, offset = 0 } = historyQuery.parse(query), path = this.path(scope, tabId);
-      const all = await this.storage.get(null), runs = [];
-      for (const [key, raw] of Object.entries(all)) {
-        if (!key.startsWith(path) || !key.endsWith(".meta")) continue;
-        const run = metaSchema.parse(clone(raw));
-        if (run.scope !== scope || run.tabId !== tabId || key !== this.path(scope, tabId, run.runId) + "meta") throw new Error("History identity does not match its storage key.");
-        runs.push(this.recovered(run));
-      }
+    return queue(this.queueKey, async () => {
+      const { scope, tabId, offset = 0 } = historyQuery.parse(query);
+      const runs = (await this.metadata(scope, tabId)).map(run => this.recovered(run));
       runs.sort((a, b) => b.startedAt - a.startedAt || b.runId.localeCompare(a.runId));
       return { runs: runs.slice(offset, offset + 30), nextOffset: runs.length > offset + 30 ? offset + 30 : null };
     });
   }
   events(query) {
-    return queue(this.storage, async () => {
+    return queue(this.queueKey, async () => {
       const context = historyQuery.parse(query), { scope, tabId, runId, offset = 0 } = context;
       if (!runId) throw new Error("Choose a history run.");
-      const run = this.recovered(await this.getRun(context)), all = await this.readEvents(this.path(scope, tabId, runId));
-      const events = []; let size = 0, cursor = offset;
-      while (cursor < all.length && events.length < 30) {
-        const length = bytes(all[cursor]);
-        if (events.length && size + length > 1024 * 1024) break;
-        events.push(all[cursor++]); size += length;
+      const run = this.recovered(await this.getRun(context)), path = this.path(scope, tabId, runId);
+      let items, total = run.eventCount;
+      if (total === undefined) {
+        const all = await this.readEvents(path);
+        total = all.length;
+        items = all.slice(offset, offset + 30);
+      } else {
+        const keys = Array.from({ length: Math.max(0, Math.min(30, total - offset)) }, (_, i) => path + "event." + (offset + i));
+        const stored = keys.length ? await this.storage.get(keys) : {};
+        items = keys.map(key => eventSchema.parse(stored[key]));
       }
-      return { events, nextOffset: cursor < all.length ? cursor : null, run };
+      const events = []; let size = 0;
+      for (const item of items) {
+        const length = bytes(item);
+        if (events.length && size + length > 1024 * 1024) break;
+        events.push(item); size += length;
+      }
+      const cursor = offset + events.length;
+      return { events, nextOffset: cursor < total ? cursor : null, run };
     });
   }
   artifact(query) {
-    return queue(this.storage, async () => {
+    return queue(this.queueKey, async () => {
       const context = historyQuery.parse(query), { scope, tabId, runId, artifactId } = context;
       if (!runId || !artifactId) throw new Error("Choose a history image.");
       await this.getRun(context);
@@ -199,6 +259,39 @@ export class ExtensionTraceHistory {
       const raw = (await this.storage.get(key))[key];
       if (raw === undefined) throw new Error("History image not found in this tab and run.");
       return artifactSchema.parse(clone(raw));
+    });
+  }
+  async removePaths(storage, paths) {
+    if (!paths.length) return 0;
+    if (storage.removeHistoryRuns) return storage.removeHistoryRuns(paths);
+    const keys = Object.keys(await storage.get(null)).filter(key => paths.some(path => key.startsWith(path)));
+    if (keys.length) await storage.remove(keys);
+    return keys.length;
+  }
+  async purge(paths) {
+    // Migration keeps the previous Chrome-local data as a backup. Remove its
+    // copies first so a failed database deletion can be retried from History.
+    const copies = this.legacyStorage ? await this.removePaths(this.legacyStorage, paths) : 0;
+    return copies + await this.removePaths(this.storage, paths);
+  }
+  remove(query) {
+    return queue(this.queueKey, async () => {
+      const context = historyDeleteQuery.parse(query);
+      const run = await this.getRun(context, { missing: true });
+      if (run && this.recovered(run).status === "running") throw new Error("An active History run cannot be deleted.");
+      const deleted = await this.purge([this.path(context.scope, context.tabId, context.runId)]) > 0;
+      if (deleted) this.changed();
+      return { deleted };
+    });
+  }
+  expire(query) {
+    return queue(this.queueKey, async () => {
+      const { scope, before } = historyExpireQuery.parse(query);
+      const runs = await this.metadata(scope);
+      const paths = runs.filter(run => this.recovered(run).status !== "running" && (run.endedAt ?? run.startedAt) < before)
+        .map(run => this.path(scope, run.tabId, run.runId));
+      if (await this.purge(paths)) this.changed();
+      return { deleted: paths.length };
     });
   }
 }

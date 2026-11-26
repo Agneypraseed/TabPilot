@@ -43,6 +43,48 @@ test("Agent shows live blockers and History holds tasks ready for review", async
     assert.equal(resume.payload.tabId, 12);
     assert.equal($("conversation").hidden, false);
 });
+test("Tasks opens recovery review before applying revised instructions or rebinding a schedule", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    const job = { id: "scheduled", tabId: 90, tabTitle: "Original project tab", prompt: "Read later", status: "scheduled",
+        needsRebind: true, pendingSchedule: true, notBefore: Date.now() + 60000, repeatEveryMs: 60000 };
+    ui.receive({ ...ui.agent, revision: 2, jobs: [job] });
+    await ui.dispatch("tasks-tab");
+    [...$("tasks-list").querySelectorAll("button")].find(button => button.textContent === "Review schedule").click();
+    await flush();
+    assert.equal($("history-review").hidden, false);
+    assert.equal(ui.calls.some(call => call.method === "task-resume"), false);
+    const review = $("task-recovery");
+    assert.match(review.textContent, /Original project tab.*Scheduled start/s);
+    review.querySelector("textarea").value = "Use the public project page.";
+    [...review.querySelectorAll("button")].find(button => button.textContent === "Rebind and keep schedule").click();
+    await flush();
+    const { payload } = ui.calls.find(call => call.method === "task-resume");
+    assert.equal(payload.taskId, job.id);
+    assert.equal(payload.tabId, 12);
+    assert.equal(payload.scheduleAction, "keep");
+    assert.equal(payload.guidance, "Use the public project page.");
+    assert.equal($("tasks-view").hidden, false);
+});
+
+test("deleting a History run requires confirmation and targets the viewed tab and run", async () => {
+    const ui = await panel(), $ = id => ui.document.getElementById(id);
+    Object.assign(ui.agent, { historyCanDelete: true });
+    ui.receive(ui.agent);
+    await ui.dispatch("history-tab");
+    $("history-content").querySelector("button").click();
+    await flush();
+    assert.equal($("history-delete").hidden, false);
+    await ui.dispatch("history-delete");
+    assert.equal($("history-delete-confirmation").hidden, false);
+    await ui.dispatch("history-delete-cancel");
+    assert.equal(ui.calls.some(call => call.method === "history-delete"), false);
+    await ui.dispatch("history-delete");
+    await ui.dispatch("history-delete-save");
+    const { payload } = ui.calls.find(call => call.method === "history-delete");
+    assert.equal(payload.tabId, 12);
+    assert.equal(payload.runId, "history-1");
+    assert.equal($("history-delete-confirmation").hidden, true);
+});
 test("parent chat shows live specialist updates and opens the child trace without selecting its tab", async () => {
     const ui = await panel({ formatted: true });
     const section = ui.document.getElementById("specialist-progress");

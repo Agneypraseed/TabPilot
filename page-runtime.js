@@ -86,6 +86,114 @@ function tabPilotPage(operation = "snapshot", args = {}) {
         }
         return { x, y, width: r.width, height: r.height };
     };
+    if (operation === "approval-prepare" || operation === "approval-check") {
+        const control = "a[href],button,input:not([type=hidden]),textarea,select,summary,[role=button],[role=link],[role=menuitem],[role=checkbox],[role=radio],[contenteditable=true]";
+        const across = (el, selector) => {
+            while (el) {
+                const match = el.closest(selector);
+                if (match) return match;
+                el = el.getRootNode().host;
+            }
+            return null;
+        };
+        const atPoint = ({ x, y }, root = document) => {
+            const el = root.elementFromPoint?.(x, y);
+            if (!el) return null;
+            if (el.shadowRoot?.elementFromPoint) {
+                const child = el.shadowRoot.elementFromPoint(x, y);
+                if (child && child !== el) return atPoint({ x, y }, el.shadowRoot);
+            }
+            if (el.tagName === "IFRAME" && el.contentDocument) {
+                const rect = el.getBoundingClientRect();
+                return atPoint({ x: x - rect.x - el.clientLeft, y: y - rect.y - el.clientTop }, el.contentDocument) ?? el;
+            }
+            return el;
+        };
+        const focused = () => {
+            let el = document.activeElement, child;
+            while ((child = el?.shadowRoot?.activeElement || (el?.tagName === "IFRAME" && el.contentDocument?.activeElement))) {
+                if (child === el) break;
+                el = child;
+            }
+            return el;
+        };
+        const { token, method, params, points = [], inputPoint, keyboardFocused } = args;
+        const entry = params.ref && globalThis[stateKey]?.nodes.get(params.ref);
+        if (params.ref && (!entry?.element?.isConnected || entry.signature !== signature(entry.element) || !visible(entry.element)))
+            throw new Error("STALE_REF: take a new snapshot before reviewing this action.");
+        const hits = points.map(point => atPoint(point));
+        const target = entry?.element ?? (method === "coordinate" ? across(hits[0], control) ?? hits[0] : method === "press" ? focused() : null);
+        const inputHit = inputPoint ? atPoint(inputPoint) : null;
+        if (inputPoint && target && across(inputHit, control) !== target && !target.contains(inputHit))
+            throw new Error("APPROVAL_CHANGED: the reviewed control is covered or moved. Observe the page before trying again.");
+        if (keyboardFocused && target && focused() !== target)
+            throw new Error("APPROVAL_CHANGED: the reviewed control lost focus. Observe the page before trying again.");
+        const form = target?.form ?? across(target, "form,[role=form]");
+        const dialog = across(target, "dialog,[role=dialog],[role=alertdialog]");
+        const region = form ?? dialog ?? target?.parentElement ?? document.body;
+        const key = method === "press" ? params.key.split("+").at(-1) : null;
+        const editable = target && (target.isContentEditable || target.matches("textarea,input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=file])"));
+        const search = Boolean(across(target, "[role=search]") || form?.querySelector("input[type=search]") ||
+            editable && (target.type === "search" || /\bsearch\b/i.test(name(target))));
+        const implicitSubmit = key === "Enter" && editable && !target.isContentEditable && target.tagName !== "TEXTAREA";
+        const submit = implicitSubmit && form?.querySelector("input[type=submit],button[type=submit],button:not([type])");
+        const effect = submit || target;
+        const label = effect ? name(effect) : "";
+        const identified = effect?.matches(control) && Boolean(label);
+        const anchor = effect?.closest("a[href]");
+        const formAction = effect?.getAttribute("formaction") || form?.getAttribute("action") || "";
+        const fieldNodes = [...(form?.elements ?? region?.querySelectorAll("input,textarea,select,[contenteditable=true]") ?? [])];
+        const associatedEditable = [...(region?.querySelectorAll("[contenteditable=true]") ?? [])].filter(el => !fieldNodes.includes(el));
+        const fields = [...fieldNodes, ...associatedEditable];
+        const proofFields = fields.slice(0, 200).map(el => [
+            signature(el), el.name, el.disabled, el.checked, el.selectedIndex,
+            Array.from(el.selectedOptions ?? [], option => option.value),
+            String(el.isContentEditable ? el.innerText : el.value ?? "").slice(0, 20000)
+        ]);
+        const nearby = String(region?.innerText ?? "").replace(/\s+/g, " ").trim();
+        const targetAttributes = el => Array.from(el?.attributes ?? [])
+            .filter(({ name }) => name !== "class" && name !== "style")
+            .map(({ name, value }) => [name, value]);
+        const fullProof = JSON.stringify([
+            location.href, document.title, target ? signature(target) : null, target?.ownerDocument.URL, effect ? signature(effect) : null,
+            anchor?.href, anchor?.target, formAction, effect?.getAttribute("formmethod") ?? form?.getAttribute("method"),
+            targetAttributes(target), target === effect ? null : targetAttributes(effect),
+            target?.disabled, form || dialog || target && !anchor ? nearby.slice(0, 30000) : null, proofFields
+        ]);
+        const approvalKey = "__tabPilotApprovalV1";
+        if (operation === "approval-check") {
+            const saved = globalThis[approvalKey];
+            if (!saved || saved.token !== token || saved.document !== document || saved.target !== target ||
+                saved.effect !== effect || saved.hits.some((hit, index) => hit !== hits[index]) || saved.proof !== fullProof)
+                throw new Error("APPROVAL_CHANGED: the reviewed page, target, or details changed. Observe it and request fresh approval before acting.");
+            return { verified: true };
+        }
+        globalThis[approvalKey] = { token, document, target, effect, hits, proof: fullProof };
+        const details = fields.flatMap(el => {
+            if (!visible(el) || ["password", "file"].includes(el.type)) return [];
+            const caption = name(el) || el.name || "";
+            const kind = /^(to|recipient|recipients|send to|email to|recipient email|beneficiary|payee)$/i.test(caption) ? "recipient"
+                : /^(subject|email subject)$/i.test(caption) ? "subject"
+                : /^(amount|total|order total|payment amount|transfer amount|price)$/i.test(caption) ? "amount"
+                : /^(item|product|record|document)$/i.test(caption) ? "item" : "";
+            return kind && el.value ? [{ kind, value: String(el.value).slice(0, 180) }] : [];
+        }).slice(0, 8);
+        const amounts = new Set(nearby.match(/(?:[$€£¥]\s*\d[\d.,]*|\b(?:USD|EUR|GBP|JPY|CAD|AUD)\s+\d[\d.,]*)/gi));
+        if (amounts.size === 1 && !details.some(item => item.kind === "amount")) details.push({ kind: "amount", value: [...amounts][0] });
+        const keyActivates = key === "Enter" || key === "Space" || key === " " || key === "Delete" || key === "Backspace";
+        const ambiguous = ["click", "coordinate"].includes(method) && (!identified && !editable ||
+            method === "coordinate" && points.length > 1 && (!hits[1] || !across(hits[1], control))) ||
+            method === "press" && keyActivates && (!target || !editable && (!identified || key === "Delete" || key === "Backspace") ||
+                !search && editable && (implicitSubmit && !identified || params.key.includes("+") && key === "Enter"));
+        return {
+            title: document.title.slice(0, 160), site: location.host, label,
+            details, search: Boolean(search), ambiguous: Boolean(ambiguous),
+            genericControl: Boolean(effect?.matches("button,[role=button],input[type=submit]") && /^(submit|confirm|ok|yes|continue|save|apply)$/i.test(label)),
+            manual: /^(i(?:'m| am) not a robot|verify (?:that )?you(?:'re| are) human)[.!?\s]*$/i.test(label) ||
+                ((document.body?.innerText?.length ?? 0) < 2500 && /(^|\n)\s*(verify (?:that )?you(?:'re| are) human|complete (?:the )?captcha|i(?:'m| am) not a robot)[.!?\s]*(\n|$)/im.test(document.body?.innerText || "")),
+            incomplete: fields.length > 200 || nearby.length > 30000 || proofFields.some(([, , , , , , value]) => value.length === 20000)
+        };
+    }
     if (operation === "snapshot") {
         const snapshotId = crypto.randomUUID();
         const nodes = new Map(), elements = [], extraText = [], frames = [];

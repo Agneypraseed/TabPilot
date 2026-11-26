@@ -44,18 +44,20 @@ async function requestExtension(method,payload={}) {
     const response=await chrome.runtime.sendMessage({type:'tabpilot:runtime-command',target:'offscreen-runtime',method,payload,
         context:{scope:await historyScope(),profileId:await browserProfileId(),enabled:(await getExecutionMode())==='extension'}});
     if(!response?.ok)throw new Error(response?.error??'The extension runtime did not respond.');
-    if(response.state&&(await getExecutionMode())==='extension')publishAgentState(response.state);
+    if(response.state&&!payload.view&&(await getExecutionMode())==='extension')publishAgentState(response.state);
     return response;
 }
-async function browserCommand(method,tabId,params={}) {
+async function browserCommand(method,tabId,params={},approval) {
     if(method==='tabs')return listEnabledTabs();
     if(method==='snapshot')return readTabSnapshot(tabId);
     if(method==='screenshot')return browser.screenshot(tabId);
+    if(method==='approval-context')return browser.approvalContext(tabId,params);
+    if(approval&&['download','download-cancel'].includes(method))await browser.approvalContext(tabId,{action:{method,params},approval});
     if(method==='download')return downloads.start(tabId,params);
     if(method==='download-status')return downloads.status(tabId,params?.downloadId);
     if(method==='download-cancel')return downloads.cancel(tabId,params?.downloadId);
     if(method.startsWith('download-local'))throw new Error('Local file downloads require the optional Developer bridge. Use Chrome downloads in extension mode.');
-    return browser.action(tabId,method,params);
+    return browser.action(tabId,method,params,approval);
 }
 async function runtimeAgent(method,payload={}) {
     if(method==="runtime-configure") {
@@ -179,7 +181,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             if(operation==='browser') {
                 if((await getExecutionMode())!=='extension')throw new Error('The extension agent is disabled in local server mode.');
-                return browserCommand(payload.method,payload.tabId,payload.params);
+                return browserCommand(payload.method,payload.tabId,payload.params,payload.approval);
             }
             if(!['local','session'].includes(payload.area))throw new Error('Invalid storage area.');
             const storage=chrome.storage[payload.area];
@@ -199,9 +201,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "tabpilot:bridge-status" || message.type === "tabpilot:ui-state") {
         getExecutionMode().then(async mode=>{
             if(mode==='extension') {
-                try {const response=await requestExtension('state');sendResponse({connected:true,agent:response.state,executionMode:mode,runtime:response.state.runtime});}
+                try {const response=await requestExtension('state', message.view ? { view: message.view } : {});sendResponse({connected:true,agent:response.state,executionMode:mode,runtime:response.state.runtime});}
                 catch(error){sendResponse({connected:false,agent:null,executionMode:mode,error:error.message});}
-            } else sendResponse({connected:bridgeReady,agent:agentState,executionMode:mode,runtime:{executionMode:mode}});
+            } else {
+                const state = message.view && bridgeReady && agentState?.scopedTaskView
+                    ? await requestAgent('state', { view: message.view }).then(response => response.state).catch(() => null) : agentState;
+                sendResponse({connected:bridgeReady,agent:state,executionMode:mode,runtime:{executionMode:mode}});
+            }
         });
         return true;
     }
@@ -304,7 +310,7 @@ async function connectBridge(token) {
             }
             if (!ready || message.type !== "request" || typeof message.id !== "string") return;
             try {
-                const data = await browserCommand(message.method, message.tabId, message.params);
+                const data = await browserCommand(message.method, message.tabId, message.params, message.approval);
                 if (socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ type: "response", id: message.id, ok: true, data }));
                 }

@@ -23,7 +23,7 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
     const temporary = await session.get('extensionSessionCredentials');
     let rememberCredentials = persistent.extensionRememberCredentials === true;
     let env = credentialSchema.parse({...persistent.extensionCredentials,...temporary.extensionSessionCredentials});
-    const trace = new ExtensionTraceHistory(database,{env,...storageLimits});
+    const trace = new ExtensionTraceHistory(database,{env,...storageLimits,...(database.kind === 'indexeddb' ? {legacyStorage:local} : {})});
     const notifications = new Notifications({env,fetch:notificationFetch,sanitize:value=>trace.clean(value)});
     if(notificationPoll) notifications.telegramReplies = offset => notificationPoll({
         env:Object.fromEntries(['TELEGRAM_BOT_TOKEN','TABPILOT_TELEGRAM_CHAT_ID'].map(key=>[key,notifications.env[key]??''])), offset
@@ -44,16 +44,18 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
             traceStore:trace,
             configure:values=>configure(values,{browser:true}),
             saveSettings:settings=>local.set({extensionAgentSettings:settings}),
-            run:(prompt,options)=>run(prompt,{...options,server:createExtensionBrowserTools({request:async(method,tabId,params)=>{
+            run:(prompt,options)=>run(prompt,{...options,server:createExtensionBrowserTools({request:async(method,tabId,params,{approval}={})=>{
+                if(method==='approval-context')return rpc('browser',{method,tabId,params});
                 let result;
-                try {result=await rpc('browser',{method,tabId,params});}
+                try {result=await rpc('browser',{method,tabId,params,...(approval?{approval}:{})});}
                 catch(error){if(options.traceContext)await trace.append(options.traceContext,{kind:'tool',tool:method,arguments:{tabId,...params},result:{error:error.message}}).catch(error=>manager.traceFailure(error));throw error;}
                 if(options.traceContext) await trace.append(options.traceContext,{kind:'tool',tool:method,arguments:{tabId,...params},result}).catch(error=>manager.traceFailure(error));
                 return result;
             }})})}
     });
     const metadata = () => ({executionMode:'extension',configuredFields:credentialNames.filter(key=>!!env[key]),compatibleBaseUrl:env.COMPATIBLE_BASE_URL??'',notificationStatus:notifications.status(),savedValues:Object.fromEntries(['TABPILOT_TELEGRAM_CHAT_ID','TABPILOT_EMAIL_FROM','TABPILOT_EMAIL_TO'].filter(name=>!!env[name]).map(name=>[name,env[name]])),rememberCredentials});
-    const snapshot = () => ({...manager.snapshot(),executionMode:'extension',runtime:metadata()});
+    const runtimeState = state => ({...state,executionMode:'extension',runtime:metadata()});
+    const snapshot = () => runtimeState(manager.snapshot());
     manager.subscribe(()=>onState(snapshot()));
     manager.subscribeHistory(revision=>onHistory(revision));
     await manager.ready;
@@ -98,12 +100,12 @@ export async function createExtensionRuntime({ rpc, scope, profileId, onState = 
             return updateConfig(payload);
         }
         if(method==='tick'){await manager.tick();return {ok:true,state:snapshot()};}
-        if(['start','task-create','task-resume','task-cancel','select-tab','human-response','history-list','history-events','history-image'].includes(method)) {
+        if(['start','task-create','task-resume','task-cancel','task-retry-repeat','select-tab','human-response'].includes(method) || method.startsWith('history-')) {
             if(payload.scope && payload.scope!==scope)throw new Error('This command belongs to a different browser session.');
             payload={...payload,scope};
         }
         const result=await manager.command(method,payload);
-        return method.startsWith('history-')?{ok:true,...result}:{ok:true,state:snapshot()};
+        return method.startsWith('history-')?{ok:true,...result}:{ok:true,state:result.jobs ? runtimeState(result) : snapshot()};
     }
     return {manager,snapshot,command(...args){const operation=commandQueue.then(()=>command(...args));commandQueue=operation.catch(()=>{});return operation;},close:async()=>{await manager.close();if(database.kind==='indexeddb')await database.close();}};
 }

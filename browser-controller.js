@@ -9,6 +9,7 @@ class TabPilotBrowser {
         this.snapshots = new Map();
         this.screenshots = new Map();
         this.dialogs = new Map();
+        this.approvals = new Map();
         this.visuals = new Map();
         this.accessWrites = Promise.resolve();
         chromeApi.debugger.onDetach.addListener((source, reason) => {
@@ -22,12 +23,12 @@ class TabPilotBrowser {
         });
         chromeApi.debugger.onEvent.addListener((source, method, params) => {
             if (method === "Page.frameNavigated" || method === "Page.navigatedWithinDocument") { this.invalidate(source.tabId); this.forgetVisual(source.tabId); }
-            if (method === "Page.javascriptDialogOpening") this.dialogs.set(source.tabId, { type: params.type, message: params.message });
+            if (method === "Page.javascriptDialogOpening") this.dialogs.set(source.tabId, { type: params.type, message: params.message, url: params.url });
             if (method === "Page.javascriptDialogClosed") this.dialogs.delete(source.tabId);
         });
     }
 
-    invalidate(tabId) { this.snapshots.delete(tabId); this.screenshots.delete(tabId); }
+    invalidate(tabId) { this.snapshots.delete(tabId); this.screenshots.delete(tabId); this.approvals.delete(tabId); }
 
     persistRevocation(tabId, revoked) {
         if (!this.chrome.storage.local) return Promise.resolve();
@@ -139,8 +140,9 @@ class TabPilotBrowser {
     async observe(tabId) {
             if (this.dialogs.has(tabId)) {
                 const tab = await this.permitted(tabId);
+                const { type, message } = this.dialogs.get(tabId);
                 return { title: tab.title || "", url: tab.url, text: "JavaScript dialog open.", truncated: false,
-                    elements: [], dialog: this.dialogs.get(tabId) };
+                    elements: [], dialog: { type, message } };
             }
             const snapshot = await this.evaluate(tabId, "snapshot");
             await this.permitted(tabId);
@@ -200,12 +202,18 @@ class TabPilotBrowser {
         }
     }
 
-    async clickPoint(tabId, x, y, button = "left", clickCount = 1) {
+    async clickPoint(tabId, x, y, button = "left", clickCount = 1, verify) {
         if (!["left", "right", "middle"].includes(button) || ![1, 2].includes(clickCount)) throw new Error("Invalid click options.");
         await this.mouse(tabId, "mouseMoved", x, y);
         for (let count = 1; count <= clickCount; count++) {
-            await this.mouse(tabId, "mousePressed", x, y, { button, clickCount: count });
-            if (!this.visuals.get(tabId)?.unsupported) await new Promise(resolve => setTimeout(resolve, 110));
+            if (verify) {
+                await this.drawVisual(tabId, x, y, true);
+                await verify({ inputPoint: { x, y } });
+                await this.command(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: count });
+            } else {
+                await this.mouse(tabId, "mousePressed", x, y, { button, clickCount: count });
+                if (!this.visuals.get(tabId)?.unsupported) await new Promise(resolve => setTimeout(resolve, 110));
+            }
             await this.mouse(tabId, "mouseReleased", x, y, { button, clickCount: count });
         }
     }
@@ -312,7 +320,7 @@ class TabPilotBrowser {
         throw new Error("Could not read screenshot dimensions.");
     }
 
-    async pointer(tabId, params) {
+    async pointerPoints(tabId, params) {
         const screenshot = this.screenshots.get(tabId);
         if (!screenshot || screenshot.screenshotId !== params.screenshotId || Date.now() - screenshot.time > 30000) {
             throw new Error("STALE_SCREENSHOT: capture a fresh screenshot before coordinate actions.");
@@ -328,24 +336,80 @@ class TabPilotBrowser {
             return { x: x / screenshot.scaleX, y: y / screenshot.scaleY };
         };
         const from = point(params.x, params.y);
+        return params.kind === "drag" ? [from, point(params.toX, params.toY)] : [from];
+    }
+
+    async pointer(tabId, params, verify) {
+        const [from, to] = await this.pointerPoints(tabId, params);
         if (params.kind === "hover") return this.mouse(tabId, "mouseMoved", from.x, from.y);
-        if (params.kind === "click" || params.kind === undefined) return this.clickPoint(tabId, from.x, from.y, params.button, params.clickCount);
+        if (params.kind === "click" || params.kind === undefined) return this.clickPoint(tabId, from.x, from.y, params.button, params.clickCount, verify);
         if (params.kind !== "drag") throw new Error("Unknown pointer operation.");
-        const to = point(params.toX, params.toY);
         await this.mouse(tabId, "mouseMoved", from.x, from.y);
-        await this.mouse(tabId, "mousePressed", from.x, from.y, { button: "left", buttons: 1, clickCount: 1 });
+        if (verify) {
+            await this.drawVisual(tabId, from.x, from.y, true);
+            await verify();
+            await this.command(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", buttons: 1, clickCount: 1 });
+        } else await this.mouse(tabId, "mousePressed", from.x, from.y, { button: "left", buttons: 1, clickCount: 1 });
         try {
             for (let step = 1; step <= 12; step++) await this.mouse(tabId, "mouseMoved", from.x + (to.x - from.x) * step / 12,
                 from.y + (to.y - from.y) * step / 12, { button: "left", buttons: 1 });
         } finally { await this.mouse(tabId, "mouseReleased", to.x, to.y, { button: "left", clickCount: 1 }); }
     }
 
-    action(tabId, method, params = {}) {
+    approvalContext(tabId, { action, approval }) {
         return this.serial(tabId, async () => {
+            if (approval) {
+                const verify = this.consumeApproval(tabId, action.method, action.params, approval);
+                await verify();
+                return { verified: true };
+            }
+            const { method, params } = action;
+            const tab = await this.permitted(tabId);
+            const dialog = this.dialogs.get(tabId);
+            if (dialog && method !== "dialog") throw new Error("A JavaScript dialog is open. Inspect the dialog before taking action.");
+            if (method === "dialog" && !dialog) throw new Error("The reviewed JavaScript dialog is no longer open.");
+            if (params.ref && !params.ref.startsWith(this.snapshots.get(tabId) + ":"))
+                throw new Error("STALE_REF: take a new snapshot before reviewing this action.");
+            const token = crypto.randomUUID();
+            const points = method === "coordinate" ? await this.pointerPoints(tabId, params) : [];
+            const details = dialog ? {
+                title: (tab.title ?? "").slice(0, 160), site: new URL(dialog.url || tab.url).host,
+                label: String(dialog.message ?? "").slice(0, 240),
+                genericControl: dialog.type === "confirm", ambiguous: dialog.type === "prompt"
+            } : await this.evaluate(tabId, "approval-prepare", { token, method, params, points });
+            if (!details || typeof details.ambiguous !== "boolean") throw new Error("The browser could not verify the current action. Observe the page again.");
+            this.approvals.set(tabId, { token, method, params: JSON.stringify(params), points, dialog,
+                url: tab.url, windowId: tab.windowId, expiresAt: Date.now() + 30 * 60 * 1000 });
+            return { ...details, token };
+        });
+    }
+
+    consumeApproval(tabId, method, params, token) {
+        const saved = this.approvals.get(tabId);
+        this.approvals.delete(tabId);
+        const changed = "APPROVAL_CHANGED: the reviewed action is no longer current. Observe the page and request fresh approval before acting.";
+        if (!saved || saved.token !== token || saved.method !== method || saved.params !== JSON.stringify(params) || saved.expiresAt < Date.now())
+            throw new Error(changed);
+        return async extra => {
+            const tab = await this.permitted(tabId);
+            if (saved.expiresAt < Date.now() || tab.url !== saved.url || tab.windowId !== saved.windowId || this.dialogs.get(tabId) !== saved.dialog)
+                throw new Error(changed);
+            if (!saved.dialog) {
+                const result = await this.evaluate(tabId, "approval-check", { token, method, params, points: saved.points, ...extra });
+                if (result?.verified !== true) throw new Error(changed);
+            }
+        };
+    }
+
+    action(tabId, method, params = {}, approval) {
+        return this.serial(tabId, async () => {
+            const verify = approval ? this.consumeApproval(tabId, method, params, approval) : undefined;
+            if (!verify) this.approvals.delete(tabId);
             if (this.dialogs.has(tabId) && method !== "dialog") throw new Error("A JavaScript dialog is open. Use browser_dialog first.");
+            await verify?.();
             let result = {};
             if (method === "coordinate") {
-                await this.pointer(tabId, params);
+                await this.pointer(tabId, params, verify);
             } else if (method === "navigate") {
                 const navigation = await this.command(tabId, "Page.navigate", { url: this.httpUrl(params.url) });
                 if (navigation.errorText) throw new Error(`Navigation failed: ${navigation.errorText}`);
@@ -403,12 +467,12 @@ class TabPilotBrowser {
             } else if (["click", "hover", "fill", "select"].includes(method)) {
                 const target = await this.resolve(tabId, params.ref);
                 const x = target.x + target.width / 2, y = target.y + target.height / 2;
-                if (method === "click") await this.clickPoint(tabId, x, y, params.button, params.clickCount);
+                if (method === "click") await this.clickPoint(tabId, x, y, params.button, params.clickCount, verify);
                 if (method === "hover") await this.mouse(tabId, "mouseMoved", x, y);
                 if (method === "fill") {
                     if (typeof params.text !== "string" || params.text.length > 20000) throw new Error("Text must be a string of at most 20000 characters.");
                     if (!target.editable || target.readOnly || ["file", "checkbox", "radio", "range", "button", "submit"].includes(target.type)) throw new Error("Target does not accept text.");
-                    await this.clickPoint(tabId, x, y);
+                    await this.clickPoint(tabId, x, y, "left", 1, verify);
                     const focus = await this.evaluate(tabId, "focus", { ref: params.ref });
                     if (!focus?.focused) throw new Error("Could not focus the editable target; take a new snapshot.");
                     await this.key(tabId, globalThis.navigator?.platform?.includes("Mac") ? "Meta+a" : "Control+a");
@@ -425,6 +489,7 @@ class TabPilotBrowser {
                     const focus = await this.evaluate(tabId, "focus", { ref: params.ref });
                     if (!focus?.focused) throw new Error("Could not focus the target.");
                 }
+                await verify?.({ keyboardFocused: true });
                 await this.key(tabId, params.key, params.holdMs);
             } else if (method === "scroll") {
                 const deltaY = params.deltaY ?? 600, deltaX = params.deltaX ?? 0;

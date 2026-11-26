@@ -38,7 +38,8 @@ async function readJson(request) {
     return JSON.parse(text);
 }
 
-export function createBridge({ token, timeoutMs = 20000, agentService, localDownloads, notifications, validateLocalDownload = async () => {} } = {}) {
+export function createBridge({ token, timeoutMs = 20000, agentService, localDownloads, notifications,
+    validateLocalDownload = async () => {}, validateBrowserApproval = async () => null } = {}) {
     if (!token) throw new Error("A pairing token is required.");
     let extension = null;
     let extensionScope = randomUUID();
@@ -123,7 +124,7 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
 
         const id = randomUUID();
         let trace = null, external = false;
-        if (traceStore && Number.isSafeInteger(command.tabId)) {
+        if (traceStore && command.method !== "approval-context" && Number.isSafeInteger(command.tabId)) {
             try {
                 const workspace = agentService.traceContextFor?.(request.headers["x-tabpilot-run"], command.tabId, extensionScope) ?? agentService.traceContext;
                 if (agentService.active && workspace && request.headers["x-tabpilot-run"] === workspace.runId &&
@@ -150,6 +151,10 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
                 if (!localDownloads) throw new Error("Restart the bridge to enable local downloads.");
                 const context = { scope: extensionScope, tabId: command.tabId, ...command.params };
                 if (command.method === "download-local") await validateLocalDownload(context);
+                if (command.approval) {
+                    const data = await validateBrowserApproval(command);
+                    if (data?.verified !== true) throw new Error("The local transfer approval could not be rechecked. Observe the page and request fresh approval.");
+                }
                 const operation = { "download-local": "start", "download-local-status": "status", "download-local-cancel": "cancel" }[command.method];
                 const data = await localDownloads[operation](context);
                 await finishTrace(entry, true, data).catch(historyFailure);
@@ -205,12 +210,12 @@ export function createBridge({ token, timeoutMs = 20000, agentService, localDown
                     if (agentService) client.send(JSON.stringify({ type: "agent-state", state: agentService.snapshot() }));
                     return;
                 }
-                if (message?.type === "agent-request" && typeof message.id === "string" && message.id.length <= 100) {
+                if (message?.type === "agent-request" && typeof message.id === "string" && message.id.length <= 100 && typeof message.method === "string") {
                     if (!agentService) {
                         client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: false, error: "Restart the bridge to enable the agent interface." }));
                         return;
                     }
-                    const payload = ["start", "task-create", "task-resume", "task-cancel", "select-tab", "human-response", "history-list", "history-events", "history-image"].includes(message.method)
+                    const payload = (["start", "task-create", "task-resume", "task-cancel", "task-retry-repeat", "select-tab", "human-response"].includes(message.method) || message.method.startsWith("history-"))
                         ? { ...message.payload, scope: extensionScope } : message.payload;
                     Promise.resolve().then(() => agentService.command(message.method, payload)).then(
                         result => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: "agent-response", id: message.id, ok: true,
@@ -296,7 +301,10 @@ async function main() {
         }
     });
     await Promise.all([agentService.ready, localDownloads.ready]);
-    const bridge = createBridge({ token, agentService, localDownloads, notifications, validateLocalDownload: async ({ tabId, url }) => {
+    const bridge = createBridge({ token, agentService, localDownloads, notifications,
+        validateBrowserApproval: ({ method, tabId, params, approval }) =>
+            requestBridge("approval-context", tabId, { action: { method, params }, approval }),
+        validateLocalDownload: async ({ tabId, url }) => {
         const snapshot = await requestBridge("snapshot", tabId);
         requireObservedDownload(snapshot, url);
     } });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { ExtensionDatabaseStorage, migrateExtensionData } from '../extension-database.mjs';
-import { ExtensionTaskStore } from '../extension-storage.mjs';
+import { ExtensionTaskStore, ExtensionTraceHistory } from '../extension-storage.mjs';
 
 const marker = 'extension.database.migration.v1';
 function fixture(t, options = {}) {
@@ -124,7 +124,7 @@ test('legacy read failure or incompatible database version never mark migration 
     await assert.rejects(migrateExtensionData({ async get() { throw new Error('Chrome storage unavailable'); } }, database), /original data has been preserved/);
     assert.deepEqual(await database.get(null), {});
     const name = 'newer-' + randomUUID();
-    const newer = await requestDone(indexedDB.open(name, 2)); newer.close();
+    const newer = await requestDone(indexedDB.open(name, 3)); newer.close();
     const older = new ExtensionDatabaseStorage({ indexedDB, name }); t.after(() => older.close());
     await assert.rejects(older.get(null), /newer TabPilot version/);
 });
@@ -145,4 +145,125 @@ test('blocked database open times out safely and a later open can succeed withou
     await new Promise(resolve => setTimeout(resolve, 20));
     await database.set({ afterBlockedOpen: 'saved' });
     assert.deepEqual(await database.get(null), { afterBlockedOpen: 'saved' });
+});
+
+test('IndexedDB histories list old metadata without loading artifacts and persist new events separately', async t => {
+    const { database, indexedDB } = fixture(t);
+    const old = { scope: randomUUID(), tabId: 12, runId: randomUUID() };
+    const current = { ...old, runId: randomUUID() };
+    const history = new ExtensionTraceHistory(database, { maxBytes: Infinity });
+    const oldPath = history.path(old.scope, old.tabId, old.runId);
+    const oldEvent = { id: randomUUID(), time: 10, text: 'Previously saved' };
+    const initial = indexedDB.open(database.name, 1);
+    initial.onupgradeneeded = () => initial.result.createObjectStore('records');
+    const versionOne = await requestDone(initial);
+    await new Promise((resolve, reject) => {
+        const transaction = versionOne.transaction('records', 'readwrite');
+        transaction.oncomplete = resolve;
+        transaction.onabort = () => reject(transaction.error);
+        const store = transaction.objectStore('records');
+        store.put({ ...old, status: 'completed', startedAt: 10 }, oldPath + 'meta');
+        store.put([oldEvent], oldPath + 'events');
+        store.put({ ...old, data: 'unrelated image', mimeType: 'image/png' }, oldPath + 'image.' + randomUUID());
+    });
+    versionOne.close();
+    const get = database.get.bind(database);
+    database.get = key => {
+        assert.notEqual(key, null, 'No task, screenshot or timeline scan is needed');
+        return get(key);
+    };
+    await history.start(current);
+    await history.append(current, { text: 'First' });
+    await history.append(current, { text: 'Second', image: { mimeType: 'image/png', data: btoa('image data') } });
+    await history.finish(current, 'completed');
+    let list;
+    const originalGet = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function(key) {
+        assert.ok(key.endsWith('.meta'), 'A run listing must only read metadata values');
+        return originalGet.call(this, key);
+    };
+    try { list = await history.list({ scope: old.scope, tabId: old.tabId }); }
+    finally { IDBObjectStore.prototype.get = originalGet; }
+    assert.deepEqual(list.runs.map(run => run.runId), [current.runId, old.runId]);
+    assert.deepEqual((await history.events(old)).events, [oldEvent]);
+    const currentPath = history.path(current.scope, current.tabId, current.runId);
+    assert.deepEqual(await database.get(currentPath + 'events'), {});
+    assert.equal((await database.get(currentPath + 'event.0'))[currentPath + 'event.0'].text, 'First');
+    const page = await history.events({ ...current, offset: 1 });
+    assert.deepEqual(page.events.map(event => event.text), ['Second']);
+    assert.equal(atob((await history.artifact({ ...current, artifactId: page.events[0].image.artifactId })).data), 'image data');
+});
+
+test('incremental IndexedDB timelines serialize appends across adapters and paginate in order', async t => {
+    const { database, indexedDB } = fixture(t);
+    const other = new ExtensionDatabaseStorage({ indexedDB, name: database.name });
+    t.after(() => other.close());
+    const stores = [new ExtensionTraceHistory(database), new ExtensionTraceHistory(other)];
+    const context = { scope: randomUUID(), tabId: 12, runId: randomUUID() };
+    await stores[0].start(context);
+    await Promise.all(Array.from({ length: 35 }, (_, index) => stores[index % 2].append(context, { text: String(index) })));
+    await stores[0].finish(context, 'completed');
+    const first = await stores[1].events(context);
+    const second = await stores[1].events({ ...context, offset: first.nextOffset });
+    assert.equal(first.nextOffset, 30);
+    assert.equal(second.nextOffset, null);
+    assert.deepEqual([...first.events, ...second.events].map(event => event.text),
+        Array.from({ length: 35 }, (_, index) => String(index)));
+});
+
+test('IndexedDB history deletion removes data and migration copies while expiry keeps active and unrelated runs', async t => {
+    const { database } = fixture(t);
+    const backup = {};
+    const legacyStorage = {
+        get: async () => structuredClone(backup),
+        remove: async keys => { for (const key of keys) delete backup[key]; },
+    };
+    const history = new ExtensionTraceHistory(database, { maxBytes: Infinity, legacyStorage });
+    history.bridgeSessionId = 'current';
+    const old = { scope: randomUUID(), tabId: 12, runId: randomUUID() };
+    const active = { ...old, runId: randomUUID() }, other = { ...old, scope: randomUUID(), runId: randomUUID() };
+    const abandoned = { ...old, tabId: 34, runId: randomUUID() };
+    const oldPath = history.path(old.scope, old.tabId, old.runId);
+    const legacy = { ...old, runId: randomUUID() };
+    const legacyPath = history.path(legacy.scope, legacy.tabId, legacy.runId);
+    for (const key of [oldPath + 'meta', oldPath + 'events', oldPath + 'image.' + randomUUID(), legacyPath + 'meta'])
+        backup[key] = { legacy: true };
+    await history.start(old);
+    await history.append(old, { image: { mimeType: 'image/png', data: btoa('image data') } });
+    await history.finish(old, 'completed');
+    await history.start({ ...active, bridgeSessionId: 'current' });
+    await history.start({ ...abandoned, bridgeSessionId: 'old' });
+    await history.start({ ...other, bridgeSessionId: 'other' });
+    const imageId = (await history.events(old)).events[0].image.artifactId;
+    await assert.rejects(history.remove(active), /active/i);
+    assert.deepEqual(await history.remove(old), { deleted: true });
+    assert.deepEqual(await history.remove(old), { deleted: false });
+    await assert.rejects(history.artifact({ ...old, artifactId: imageId }), /not found/);
+    assert.deepEqual(Object.keys(await database.get(null)).filter(key => key.startsWith(oldPath)), []);
+    assert.deepEqual(Object.keys(backup), [legacyPath + 'meta']);
+    assert.deepEqual(await history.remove(legacy), { deleted: true });
+    assert.deepEqual(Object.keys(backup), []);
+    assert.deepEqual(await history.expire({ scope: old.scope, before: Date.now() + 1000 }), { deleted: 1 });
+    assert.deepEqual((await history.list(old)).runs.map(run => run.runId), [active.runId]);
+    assert.deepEqual((await history.list(other)).runs.map(run => run.runId), [other.runId]);
+});
+
+test('IndexedDB remembers History scopes across connections without sharing them between profiles', async t => {
+    const { database, indexedDB } = fixture(t);
+    const profile = randomUUID(), otherProfile = randomUUID();
+    const first = randomUUID(), second = randomUUID(), other = randomUUID();
+    const history = new ExtensionTraceHistory(database);
+    await history.rememberScope(first, profile);
+    await history.rememberScope(other, otherProfile);
+    await database.close();
+    const reopened = new ExtensionDatabaseStorage({ indexedDB, name: database.name });
+    t.after(() => reopened.close());
+    const next = new ExtensionTraceHistory(reopened);
+    await next.rememberScope(first, profile);
+    await next.rememberScope(second, profile);
+    await assert.rejects(next.rememberScope(first, otherProfile), { code: 'HISTORY_SCOPE_CONFLICT' });
+    await assert.rejects(next.rememberScope('invalid', profile));
+    await assert.rejects(next.scopesForProfile('invalid'));
+    assert.deepEqual(await next.scopesForProfile(profile), [first, second]);
+    assert.deepEqual(await next.scopesForProfile(otherProfile), [other]);
 });

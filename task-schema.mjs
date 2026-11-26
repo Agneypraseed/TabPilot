@@ -3,6 +3,12 @@ const uuid = z.string().uuid();
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const prompt = z.string().trim().min(1).max(12000);
 const mode = z.enum(["browser", "computer"]);
+export const taskResumeSchema = z.object({
+  taskId: uuid,
+  tabId: integer.optional(),
+  scheduleAction: z.enum(["keep", "run-now", "skip"]).default("keep"),
+  guidance: z.string().trim().max(12000).optional(),
+}).strict();
 export const taskInputSchema = z.object({
   scope: uuid,
   profileId: uuid.optional(),

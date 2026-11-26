@@ -38,19 +38,35 @@
     historyBusy = false,
     historyReload = false,
     historyRevision = -1;
-  const active = () =>
+  let reviewFocusId;
+  let historyDeletion;
+  const recoveryDrafts = new Map();
+  let scopedTaskView = false, pinnedTaskId, viewRefresh, refreshingView = false, refreshRequested = false;
+  const panelView = () => ({ tabId: selected?.id ?? null, ...(pinnedTaskId ? { taskId: pinnedTaskId } : {}) });
+  const viewMatches = state => !scopedTaskView || (state?.view?.tabId === (selected?.id ?? null) && state?.view?.taskId === pinnedTaskId);
+  const viewCommands = new Set(["start", "task-create", "task-resume", "task-cancel", "task-retry-repeat", "select-tab",
+    "clear", "pause", "resume", "stop", "steer", "settings", "human-response"]);
+  const active = () => viewMatches(agent) &&
     ["running", "pausing", "paused", "needs-input", "waiting-for-worker", "stopping"].includes(
       agent?.status,
     );
   const attentionCards = new Map();
   const taskView = globalThis.TabPilotTaskView ? new globalThis.TabPilotTaskView({ document, command,
     selected: () => selected, notice, mode: () => mode, viewTrace: openTaskTrace,
+    reviewTask: job => {
+      reviewFocusId = job.id;
+      showHistorySection("review");
+      showWorkspaceView("history");
+      renderTaskProgress();
+    },
     viewAgent: async job => {
       selected = tabs.find(tab => tab.id === job.tabId) || selected;
       if (!selected || selected.id !== job.tabId) throw new Error("This tab is no longer open. Review and resume on a selected tab instead.");
       $("target-tab").value = String(selected.id);
+      if (scopedTaskView) pinnedTaskId = job.id;
       await command("select-tab", { tabId: selected.id });
-      if (agent.taskId !== job.id && job.runId) {
+      if ((agent.taskId !== job.id || !agent.runId) && job.runId) {
+        pinnedTaskId = undefined;
         openTaskTrace(job);
         return;
       }
@@ -212,8 +228,13 @@
     return response;
   }
   async function command(method, payload = {}) {
+    if (scopedTaskView && viewCommands.has(method)) payload = { ...payload, view: panelView() };
     const result = await request("tabpilot:agent", { method, payload });
-    if (result.state) receive(result.state);
+    if (result.state) {
+      if (method === "task-resume" && result.state.view?.tabId === selected?.id && result.state.view?.taskId)
+        pinnedTaskId = result.state.view.taskId;
+      receive(result.state);
+    }
     return result;
   }
   function host(url) {
@@ -254,6 +275,7 @@
     }
   }
   function resetHistory() {
+    historyDeletion = undefined;
     historyWorker = null;
     historyParent = null;
     historyOrigin = null;
@@ -263,6 +285,8 @@
     $("history-content").replaceChildren();
     $("history-more").hidden = true;
     $("history-back").hidden = true;
+    $("history-delete").hidden = true;
+    $("history-delete-confirmation").hidden = true;
   }
   function showHistorySection(section) {
     historySection = section;
@@ -414,6 +438,7 @@
     const backLabel = historyOrigin?.view === "history" ? "← Back to review" : historyOrigin?.view === "tasks" ? "← Back to tasks" : "← Back to chat";
     $("history-back").textContent = historyParent ? "← Coordinator trace" : historyWorker ? backLabel : "← All runs for this tab";
     $("history-back").hidden = !historyRun;
+    renderHistoryDelete();
     if (!connected || (!selected && !historyWorker) || !agent?.historyAvailable) {
       $("history-status").textContent = !connected
         ? executionMode === "bridge" ? "Connect the developer server to view its History." : "Starting extension History…"
@@ -445,6 +470,7 @@
         return;
       const data = response.history;
       if (runId && data.run) historyRun = data.run;
+      renderHistoryDelete();
       if (!append) $("history-content").replaceChildren();
       $("history-back").hidden = !runId;
       if (!append && runId && historyRun.specialists?.length) $("history-content").append(historySpecialistLinks(historyRun));
@@ -474,12 +500,27 @@
       }
     }
   }
+  function historyDeleteTarget() {
+    const tabId = historyWorker?.tabId ?? selected?.id;
+    return connected && agent?.historyCanDelete && Number.isInteger(tabId) && historyRun?.runId &&
+      ["completed", "error", "failed", "stopped", "interrupted", "cancelled"].includes(historyRun.status)
+      ? { tabId, runId: historyRun.runId, ...(historyWorker?.id ? { taskId: historyWorker.id } : {}) } : null;
+  }
+  function renderHistoryDelete() {
+    const target = historyDeleteTarget();
+    if (historyDeletion && JSON.stringify(historyDeletion) !== JSON.stringify(target)) historyDeletion = undefined;
+    $("history-delete").hidden = !target || Boolean(historyDeletion);
+    $("history-delete-confirmation").hidden = !historyDeletion;
+  }
   function fillSettings() {
     if (!agent?.settings || settingsDirty) return;
     const s = agent.settings;
     $("provider").value = s.provider;
     $("model").value = s.model;
     $("max-turns").value = s.maxTurns;
+    $("max-task-turns").value = s.maxTaskTurns ?? 120;
+    $("task-timeout").value = Math.ceil((s.maxTaskActiveMs ?? 900000) / 60000);
+    $("history-retention").value = String(s.historyRetentionDays ?? 0);
     $("approval-mode").value = s.approvalMode || "important";
     $("sound-alerts").checked = s.soundAlerts !== false;
     $("download-directory").value = s.downloadDirectory || "";
@@ -616,6 +657,7 @@
       enabled: TabPilotTabAccess.enabled(stored, tab.id),
     }));
     selected = tabs.find((tab) => tab.id === selected?.id) ?? null;
+    if (selected?.id !== oldId) pinnedTaskId = undefined;
     $("target-tab").replaceChildren();
     if (!tabs.length || (preferActive && Number.isInteger(contextWindowId) && !selected)) {
       const option = document.createElement("option");
@@ -633,7 +675,10 @@
     }
     if (selected) $("target-tab").value = String(selected.id);
     renderControls();
-    if (connected && agent?.jobs && selected && agent.selectedTabId !== selected.id)
+    if (scopedTaskView && !viewMatches(agent)) {
+      renderMessages();
+      queueViewRefresh();
+    } else if (connected && agent?.jobs && selected && agent.selectedTabId !== selected.id)
       await command("select-tab", { tabId: selected.id });
     if (workspaceView === "history" && historyTab !== selected?.id) {
       resetHistory();
@@ -680,11 +725,12 @@
       : "Ⅱ Pause";
     $("pause").disabled = ["stopping", "needs-input", "waiting-for-worker"].includes(agent?.status);
     $("stop").disabled = agent?.status === "stopping";
-    $("new-chat").disabled = active();
+    $("new-chat").disabled = active() || !viewMatches(agent);
     $("send").disabled =
       busy ||
       !connected ||
       !agent ||
+      !viewMatches(agent) ||
       !selected?.enabled ||
       ["stopping", "needs-input"].includes(agent?.status);
     $("send").setAttribute(
@@ -817,10 +863,11 @@
     const current = jobs.find(job => job.id === agent?.taskId && job.tabId === selected?.id && !job.needsRebind);
     const continued = new Set(jobs.map(job => job.resumedFrom).filter(Boolean));
     const recovery = jobs.filter(job => !job.parentTaskId && !job.resumedAs && !continued.has(job.id) &&
-      (["interrupted", "failed", "paused"].includes(job.status) ||
+      (["interrupted", "failed", "paused", "waiting-for-tab"].includes(job.status) || job.scheduleNeedsReview ||
         job.needsRebind && ["queued", "scheduled", "waiting-for-tab"].includes(job.status)) &&
       !job.executing).sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
-    const signature = JSON.stringify([current, current && taskDetail(current), recovery, connected, selected?.id, selected?.title, selected?.enabled, agent?.historyAvailable, providerReady()]);
+    const missed = recovery.filter(job => job.pendingSchedule && job.notBefore <= Date.now()).map(job => job.id);
+    const signature = JSON.stringify([current, current && taskDetail(current), recovery, missed, reviewFocusId, connected, selected?.id, selected?.title, selected?.enabled, agent?.historyAvailable, providerReady()]);
     if (signature !== progressSignature) {
       progressSignature = signature;
       const overview = $("task-overview");
@@ -837,12 +884,12 @@
           overview.append(previous);
         }
       }
-      renderRecovery(recovery);
+      renderRecovery(recovery, new Set(missed));
       $("empty-state").hidden = Boolean(agent?.events?.length || !overview.hidden);
     }
     renderSpecialists(current, recovery.includes(current));
   }
-  function renderRecovery(jobs) {
+  function renderRecovery(jobs, missed) {
     const section = $("task-recovery");
     section.replaceChildren();
     section.classList.toggle("specialist-progress", jobs.length > 0);
@@ -850,7 +897,7 @@
       section.append(taskText("p", connected ? "No tasks need review." : "Connect to TabPilot to see tasks that need review.", "help"));
       return;
     }
-    for (const job of jobs) {
+    for (const job of [...jobs].sort((a, b) => Number(b.id === reviewFocusId) - Number(a.id === reviewFocusId))) {
       const row = document.createElement("article");
       const reason = {
         "connection-lost": "The browser connection dropped during this task.",
@@ -862,30 +909,59 @@
       }[job.status] || "The original browser session ended. Choose where to run this task.";
       row.append(taskText("strong", job.prompt.split("\n")[0]), taskText("p", reason));
       if (job.summary) row.append(taskText("p", job.summary));
+      if (job.tabTitle) row.append(taskText("p", `Original tab · ${job.tabTitle}`));
+      if (job.pendingSchedule) {
+        const timing = new Date(job.notBefore).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+        row.append(taskText("p", `${missed.has(job.id) ? "Missed start" : "Scheduled start"} · ${timing}${job.repeatEveryMs ? ` · Every ${job.repeatEveryMs / 60000} minutes` : ""}`));
+      }
       if (job.lastStep) {
         const label = labels[job.lastStep.tool] || job.lastStep.tool;
         row.append(taskText("p", `Last recorded step: ${label}. ${job.lastStep.phase === "complete" ? "The browser reported that the step finished." : "Its outcome may need to be verified."}`));
       }
       if (job.runId && connected && agent.historyAvailable) row.append(taskTraceButton(job));
-      const button = taskText("button", "Continue on selected tab");
-      button.type = "button";
-      button.className = "secondary";
-      button.disabled = !connected || !selected?.enabled || !providerReady();
       const target = selected?.id;
       row.append(taskText("p", !connected ? "Reconnect to continue." : !providerReady() ? "Configure your model provider in Settings to continue." : selected?.enabled
         ? `TabPilot will check ${selected.title || host(selected.url)} before taking action.`
         : "Choose a tab with access enabled."));
-      button.addEventListener("click", async () => {
-        if (!connected || !selected?.enabled || selected.id !== target || !providerReady()) return;
-        button.disabled = true;
-        try {
-          await command("task-resume", { taskId: job.id, tabId: target });
-          showWorkspaceView("agent");
-        }
-        catch (error) { notice(error.message); }
-        finally { button.disabled = !connected || !selected?.enabled || !providerReady(); }
-      });
-      row.append(button);
+      const guidanceLabel = taskText("label", "Updated instructions (optional)");
+      const guidance = document.createElement("textarea");
+      guidance.rows = 2;
+      guidance.maxLength = 12000;
+      guidance.value = recoveryDrafts.get(job.id) || "";
+      guidance.addEventListener("input", () => recoveryDrafts.set(job.id, guidance.value));
+      guidanceLabel.append(guidance);
+      row.append(guidanceLabel);
+      const options = job.pendingSchedule ? [
+        ...(missed.has(job.id) ? [["skip", "Skip missed run"]] : [["keep", "Rebind and keep schedule"]]),
+        ["run-now", "Run now"],
+      ] : [["keep", "Continue on selected tab"]];
+      const actions = document.createElement("div");
+      actions.className = "task-actions";
+      for (const [scheduleAction, title] of options) {
+        const runsNow = !job.pendingSchedule || scheduleAction === "run-now";
+        const button = taskText("button", title);
+        button.type = "button";
+        button.className = "secondary";
+        const canSkipWithoutTab = scheduleAction === "skip" && !job.repeatEveryMs;
+        const canSubmit = () => connected && (canSkipWithoutTab || selected?.enabled && selected.id === target) && (!runsNow || providerReady());
+        button.disabled = !canSubmit();
+        button.addEventListener("click", async () => {
+          if (!canSubmit() || actions.querySelector("[data-submitting]")) return;
+          button.dataset.submitting = "true";
+          button.disabled = true;
+          try {
+            const updated = guidance.value.trim();
+            await command("task-resume", { taskId: job.id, ...(target !== undefined ? { tabId: target } : {}),
+              ...(job.pendingSchedule ? { scheduleAction } : {}), ...(updated ? { guidance: updated } : {}) });
+            recoveryDrafts.delete(job.id);
+            reviewFocusId = undefined;
+            showWorkspaceView(runsNow ? "agent" : "tasks");
+          } catch (error) { notice(error.message); }
+          finally { delete button.dataset.submitting; button.disabled = !canSubmit(); }
+        });
+        actions.append(button);
+      }
+      row.append(actions);
       section.append(row);
     }
   }
@@ -918,7 +994,7 @@
     }
   }
   function renderMessages() {
-    const events = agent?.events || [];
+    const events = viewMatches(agent) ? agent?.events || [] : [];
     const signature = events.map((e) => e.id).join();
     if (signature !== rendered) {
       const main = $("conversation");
@@ -951,7 +1027,7 @@
       if (atEnd || events.at(-1)?.kind === "user")
         main.scrollTop = main.scrollHeight;
     }
-    const shot = agent?.screenshot;
+    const shot = viewMatches(agent) ? agent?.screenshot : null;
     const next =
       shot && /^image\/(jpeg|png)$/.test(shot.mimeType)
         ? `data:${shot.mimeType};base64,${shot.data}`
@@ -967,6 +1043,14 @@
     }
   }
   function receive(state) {
+    scopedTaskView = Boolean(state.scopedTaskView);
+    if (!viewMatches(state)) {
+      if (state.executionMode) executionMode = state.executionMode;
+      acceptRuntime(state.runtime);
+      renderAttention(state.requests);
+      queueViewRefresh();
+      return;
+    }
     if (
       agent &&
       state.sessionId === agent.sessionId &&
@@ -986,7 +1070,7 @@
     }
   }
   async function sync() {
-    const state = await request("tabpilot:ui-state");
+    const state = await request("tabpilot:ui-state", { view: panelView() });
     connected = Boolean(state.connected);
     if(state.error) notice(state.error);
     if (state.executionMode) executionMode = state.executionMode;
@@ -997,6 +1081,20 @@
       renderAttention([]);
       renderControls();
     }
+  }
+  function queueViewRefresh() {
+    refreshRequested = true;
+    if (viewRefresh || refreshingView) return;
+    viewRefresh = setTimeout(async () => {
+      viewRefresh = undefined;
+      refreshingView = true;
+      refreshRequested = false;
+      try { await sync(); } catch {}
+      finally {
+        refreshingView = false;
+        if (refreshRequested) queueViewRefresh();
+      }
+    }, 60);
   }
   async function toggleAccess() {
     if (!selected || accessBusy) return;
@@ -1074,6 +1172,11 @@
   );
   $("target-tab").addEventListener("change", async () => {
     selected = tabs.find((t) => t.id === Number($("target-tab").value));
+    pinnedTaskId = undefined;
+    if (scopedTaskView) {
+      renderMessages();
+      renderControls();
+    }
     if (connected && agent?.jobs && selected) {
       try { await command("select-tab", { tabId: selected.id }); }
       catch (error) { notice(error.message); }
@@ -1179,6 +1282,8 @@
         model: $("model").value.trim(),
         maxTurns: Number($("max-turns").value),
         timeoutMs: Number($("timeout").value),
+        ...(scopedTaskView ? { maxTaskTurns: Number($("max-task-turns").value), maxTaskActiveMs: Number($("task-timeout").value) * 60000,
+          historyRetentionDays: Number($("history-retention").value) } : {}),
         approvalMode: $("approval-mode").value,
         soundAlerts: $("sound-alerts").checked,
         ...(executionMode === "bridge" && $("download-directory").value.trim() ? { downloadDirectory: $("download-directory").value.trim() } : {}),
@@ -1201,13 +1306,15 @@
       notice("");
       if (active())
         await command("steer", { runId: agent.runId, text: prompt });
-      else
+      else {
+        pinnedTaskId = undefined;
         await command("start", {
           prompt,
           tabId: selected.id,
           mode,
           tabTitle: selected.title,
         });
+      }
       $("task").value = "";
       $("task").focus();
     } catch (error) {
@@ -1305,11 +1412,36 @@
     refreshHistory();
   });
   $("history-review-tab").addEventListener("click", () => {
+    reviewFocusId = undefined;
     resetHistory();
     showHistorySection("review");
   });
   $("refresh-history").addEventListener("click", () => refreshHistory());
   $("history-more").addEventListener("click", () => refreshHistory(true));
+  $("history-delete").addEventListener("click", () => {
+    historyDeletion = historyDeleteTarget();
+    renderHistoryDelete();
+    $("history-delete-cancel").focus();
+  });
+  $("history-delete-cancel").addEventListener("click", () => {
+    historyDeletion = undefined;
+    renderHistoryDelete();
+    $("history-delete").focus();
+  });
+  $("history-delete-save").addEventListener("click", async () => {
+    const target = historyDeletion;
+    if (!target || JSON.stringify(target) !== JSON.stringify(historyDeleteTarget())) return;
+    const button = $("history-delete-save");
+    button.disabled = true;
+    try {
+      await command("history-delete", target);
+      if (historyDeletion !== target) return;
+      historyDeletion = undefined;
+      $("history-back").click();
+      notice("Run and its screenshots deleted.", true);
+    } catch (error) { notice(error.message); }
+    finally { button.disabled = false; renderHistoryDelete(); }
+  });
   $("history-back").addEventListener("click", () => {
     if (historyParent) {
       historyRun = historyParent.run;
@@ -1381,7 +1513,7 @@
       }),
     2000,
   );
-  window.addEventListener("unload", () => clearInterval(poll));
+  window.addEventListener("unload", () => { clearInterval(poll); clearTimeout(viewRefresh); });
   if (params.get("layout") === "tab")
     notice(
       "This browser opened a workspace tab. Desktop Chrome also supports keeping TabPilot beside the page.",

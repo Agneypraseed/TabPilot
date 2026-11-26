@@ -41,8 +41,8 @@ export async function loadBridgeConfig() {
     return config;
 }
 
-export async function requestBridge(command, tabId, params = {}, { source = "cli" } = {}) {
-    const action = command !== "tabs" && command !== "snapshot" ? parseBrowserCommand({ method: command, tabId, params }) : null;
+export async function requestBridge(command, tabId, params = {}, { source = "cli", approval, runId = process.env.TABPILOT_RUN_ID, signal } = {}) {
+    const action = command !== "tabs" && command !== "snapshot" ? parseBrowserCommand({ method: command, tabId, params, ...(approval ? { approval } : {}) }) : null;
     if (command === "snapshot" && (!Number.isSafeInteger(tabId) || tabId < 0)) {
         throw new Error("Invalid tab ID.");
     }
@@ -54,12 +54,13 @@ export async function requestBridge(command, tabId, params = {}, { source = "cli
         response = await fetch(config.url + path, {
             method: "POST",
             headers: { Authorization: `Bearer ${config.token}`, "X-TabPilot-Source": source, "X-TabPilot-Client": clientSession,
-                ...(process.env.TABPILOT_RUN_ID ? { "X-TabPilot-Run": process.env.TABPILOT_RUN_ID } : {}), ...(action ? { "Content-Type": "application/json" } : {}) },
+                ...(runId ? { "X-TabPilot-Run": runId } : {}), ...(action ? { "Content-Type": "application/json" } : {}) },
             ...(action ? { body: JSON.stringify(action) } : {}),
-            signal: AbortSignal.timeout(25000),
+            signal: AbortSignal.any([AbortSignal.timeout(25000), ...(signal ? [signal] : [])]),
             redirect: "error"
         });
     } catch {
+        signal?.throwIfAborted();
         throw new Error("Cannot reach the local bridge. Check npm start and reconnect the extension.");
     }
     const result = await response.json();

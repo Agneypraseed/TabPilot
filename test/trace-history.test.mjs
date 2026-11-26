@@ -74,3 +74,41 @@ test("abandoned runs are marked interrupted after a bridge restart", async t => 
     assert.equal((await reopened.list({ scope, tabId: 12 })).runs[0].status, "interrupted");
     assert.equal((await reopened.events({ scope, tabId: 12, runId })).events.length, 0);
 });
+
+test("developer History removes the selected run and artifacts and only expires old inactive runs in scope", async t => {
+    const store = new TraceHistory(await historyFixture(t));
+    store.bridgeSessionId = "current";
+    const old = { scope: randomUUID(), tabId: 12, runId: randomUUID() };
+    const active = { ...old, runId: randomUUID() }, other = { ...old, scope: randomUUID(), runId: randomUUID() };
+    const abandoned = { ...old, tabId: 34, runId: randomUUID() };
+    await store.start(old);
+    await store.append(old, { image: { mimeType: "image/png", data: Buffer.from("test image").toString("base64") } });
+    await store.finish(old, "completed");
+    await store.start({ ...active, bridgeSessionId: "current" });
+    await store.start({ ...abandoned, bridgeSessionId: "old" });
+    await store.start({ ...other, bridgeSessionId: "old" });
+    const { artifactId } = (await store.events(old)).events[0].image;
+    await assert.rejects(store.remove(active), /active/i);
+    assert.deepEqual(await store.remove(old), { deleted: true });
+    assert.deepEqual(await store.remove(old), { deleted: false });
+    await assert.rejects(store.artifact({ ...old, artifactId }), /not found/);
+    await assert.rejects(readFile(join(store.path(old.scope, old.tabId, old.runId), "meta.json")), { code: "ENOENT" });
+    assert.deepEqual(await store.expire({ scope: old.scope, before: 0 }), { deleted: 0 });
+    assert.deepEqual(await store.expire({ scope: old.scope, before: Date.now() + 1000 }), { deleted: 1 });
+    assert.deepEqual((await store.list(old)).runs.map(run => run.runId), [active.runId]);
+    assert.deepEqual((await store.list(other)).runs.map(run => run.runId), [other.runId]);
+});
+
+test("developer History remembers scoped browser ancestry after reopening", async t => {
+    const root = await historyFixture(t);
+    const store = new TraceHistory(root), reopened = new TraceHistory(root);
+    const profile = randomUUID(), otherProfile = randomUUID();
+    const first = randomUUID(), second = randomUUID(), other = randomUUID();
+    await store.rememberScope(first, profile);
+    await Promise.all([reopened.rememberScope(second, profile), store.rememberScope(other, otherProfile)]);
+    await assert.rejects(reopened.rememberScope(first, otherProfile), { code: "HISTORY_SCOPE_CONFLICT" });
+    await assert.rejects(reopened.rememberScope("invalid", profile));
+    await assert.rejects(reopened.scopesForProfile("invalid"));
+    assert.deepEqual(await reopened.scopesForProfile(profile), [first, second]);
+    assert.deepEqual(await reopened.scopesForProfile(otherProfile), [other]);
+});
